@@ -50,8 +50,6 @@ using namespace epee;
 
 static const char *DEFAULT_DNS_PUBLIC_ADDR[] =
 {
-  "9.9.9.10",           // Quad9 (unfiltered)
-  "149.112.112.10",     // Quad9 secondary
   "185.222.222.222",    // DNS.SB
   "45.11.45.11",        // DNS.SB secondary
   "194.150.168.168",    // CCC (Germany)
