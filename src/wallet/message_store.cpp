@@ -1233,16 +1233,17 @@ void message_store::encrypt(crypto::public_key public_key, const std::string &pl
   crypto::chacha20(plaintext.data(), plaintext.size(), chacha_key, iv, &ciphertext[0]);
 }
 
-void message_store::decrypt(const std::string &ciphertext, const crypto::public_key &encryption_public_key, const crypto::chacha_iv &iv,
+bool message_store::decrypt(const std::string &ciphertext, const crypto::public_key &encryption_public_key, const crypto::chacha_iv &iv,
                             const crypto::secret_key &view_secret_key, std::string &plaintext)
 {
   crypto::key_derivation derivation;
-  bool success = crypto::generate_key_derivation(encryption_public_key, view_secret_key, derivation);
-  THROW_WALLET_EXCEPTION_IF(!success, tools::error::wallet_internal_error, "Failed to generate key derivation for message decryption");
+  if (!crypto::generate_key_derivation(encryption_public_key, view_secret_key, derivation))
+    return false;
   crypto::chacha_key chacha_key;
   crypto::generate_chacha_key(&derivation, sizeof(derivation), chacha_key, 1);
   plaintext.resize(ciphertext.size());
   crypto::chacha20(ciphertext.data(), ciphertext.size(), chacha_key, iv, &plaintext[0]);
+  return true;
 }
 
 void message_store::send_message(const multisig_wallet_state &state, uint32_t id)
@@ -1363,14 +1364,23 @@ bool message_store::check_for_messages(const multisig_wallet_state &state, std::
       }
       if (take)
       {
-        crypto::hash actual_hash = crypto::cn_fast_hash(rm.content.data(), rm.content.size());
-        THROW_WALLET_EXCEPTION_IF(actual_hash != rm.hash, tools::error::wallet_internal_error, "Message hash mismatch");
-
-        bool signature_valid = crypto::check_signature(actual_hash, rm.source_monero_address.m_view_public_key, rm.signature);
-        THROW_WALLET_EXCEPTION_IF(!signature_valid, tools::error::wallet_internal_error, "Message signature not valid");
-
+        // A message failing these checks cannot come from a signer: skip it instead of throwing,
+        // which would abort the whole check and hide every message behind it, on every check
         std::string plaintext;
-        decrypt(rm.content, rm.encryption_public_key, rm.iv, decrypt_key, plaintext);
+        const char *reason = nullptr;
+        crypto::hash actual_hash = crypto::cn_fast_hash(rm.content.data(), rm.content.size());
+        if (actual_hash != rm.hash)
+          reason = "hash mismatch";
+        else if (!crypto::check_signature(actual_hash, rm.source_monero_address.m_view_public_key, rm.signature))
+          reason = "invalid signature";
+        else if (!decrypt(rm.content, rm.encryption_public_key, rm.iv, decrypt_key, plaintext))
+          reason = "decryption failed";
+        if (reason)
+        {
+          MWARNING("Ignoring MMS message from " << account_address_to_string(rm.source_monero_address) << ": " << reason);
+          m_transporter.delete_message(rm.transport_id);
+          continue;
+        }
         size_t index = add_message(state, sender_index, (message_type)rm.type, message_direction::in, plaintext);
         message &m = m_messages[index];
         m.hash = rm.hash;

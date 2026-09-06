@@ -406,7 +406,7 @@ namespace mms
     bool message_ids_complete(const std::vector<uint32_t> &ids) const;
     void encrypt(crypto::public_key public_key, const std::string &plaintext,
                  std::string &ciphertext, crypto::public_key &encryption_public_key, crypto::chacha_iv &iv);
-    void decrypt(const std::string &ciphertext, const crypto::public_key &encryption_public_key, const crypto::chacha_iv &iv,
+    bool decrypt(const std::string &ciphertext, const crypto::public_key &encryption_public_key, const crypto::chacha_iv &iv,
                  const crypto::secret_key &view_secret_key, std::string &plaintext);
     std::string create_auto_config_token();
     void setup_signer_for_auto_config(uint32_t index, const std::string token, bool receiving);
