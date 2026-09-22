@@ -68,6 +68,7 @@ set(unit_tests_sources
   memwipe.cpp
   mlocker.cpp
   mnemonics.cpp
+  polyseed.cpp
   mul_div.cpp
   multiexp.cpp
   multisig.cpp

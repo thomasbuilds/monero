@@ -40,31 +40,64 @@
 
 namespace polyseed {
 
-    inline size_t utf8_norm(const char* str, polyseed_str norm, utf8proc_option_t options) {
+    static const utf8proc_option_t NFC_OPTIONS = (utf8proc_option_t)(UTF8PROC_NULLTERM | UTF8PROC_STABLE | UTF8PROC_COMPOSE | UTF8PROC_STRIPNA);
+    static const utf8proc_option_t NFKD_OPTIONS = (utf8proc_option_t)(UTF8PROC_NULLTERM | UTF8PROC_STABLE | UTF8PROC_DECOMPOSE | UTF8PROC_COMPAT | UTF8PROC_STRIPNA);
+
+    // Called from libpolyseed's C code, so it must not throw: on failure it leaves an empty string
+    // and returns false. decode() and crypt() validate their input beforehand.
+    static bool utf8_norm(const char* str, polyseed_str norm, utf8proc_option_t options, size_t& size) noexcept {
       utf8proc_int32_t buffer[POLYSEED_STR_SIZE];
       utf8proc_ssize_t result;
 
       result = utf8proc_decompose(reinterpret_cast<const uint8_t*>(str), 0, buffer, POLYSEED_STR_SIZE, options);
-      if (result < 0 || result > (POLYSEED_STR_SIZE - 1)) {
-        throw std::runtime_error("Unicode normalization failed");
+      if (result >= 0 && result <= (POLYSEED_STR_SIZE - 1)) {
+        result = utf8proc_reencode(buffer, result, options);
       }
-
-      result = utf8proc_reencode(buffer, result, options);
-      if (result < 0 || result > (POLYSEED_STR_SIZE - 1)) {
-        throw std::runtime_error("Unicode normalization failed");
+      const bool ok = result >= 0 && result <= (POLYSEED_STR_SIZE - 1);
+      if (ok) {
+        strcpy(norm, reinterpret_cast<const char*>(buffer));
+        size = result;
       }
-
-      strcpy(norm, reinterpret_cast<const char*>(buffer));
+      else {
+        norm[0] = '\0';
+        size = 0;
+      }
       sodium_memzero(buffer, sizeof(buffer));
-      return result;
+      return ok;
     }
 
-    static size_t utf8_nfc(const char* str, polyseed_str norm) {
-        return utf8_norm(str, norm, (utf8proc_option_t)(UTF8PROC_NULLTERM | UTF8PROC_STABLE | UTF8PROC_COMPOSE | UTF8PROC_STRIPNA));
+    static size_t utf8_nfc(const char* str, polyseed_str norm) noexcept {
+        size_t size;
+        utf8_norm(str, norm, NFC_OPTIONS, size);
+        return size;
     }
 
-    static size_t utf8_nfkd(const char* str, polyseed_str norm) {
-        return utf8_norm(str, norm, (utf8proc_option_t)(UTF8PROC_NULLTERM | UTF8PROC_STABLE | UTF8PROC_DECOMPOSE | UTF8PROC_COMPAT | UTF8PROC_STRIPNA));
+    static size_t utf8_nfkd(const char* str, polyseed_str norm) noexcept {
+        size_t size;
+        utf8_norm(str, norm, NFKD_OPTIONS, size);
+        return size;
+    }
+
+    // Same condition under which libpolyseed invokes the NFKD callback (utf8_nfkd_lazy)
+    static void check_utf8_nfkd(const char* str) {
+      bool non_ascii = false;
+      const unsigned char* pos = reinterpret_cast<const unsigned char*>(str);
+      for (size_t size = 0; *pos != '\0' && size < POLYSEED_STR_SIZE - 1; ++pos, ++size) {
+        if (*pos >= 0x80) {
+          non_ascii = true;
+          break;
+        }
+      }
+      if (!non_ascii) {
+        return;
+      }
+      polyseed_str norm;
+      size_t size;
+      const bool ok = utf8_norm(str, norm, NFKD_OPTIONS, size);
+      sodium_memzero(norm, sizeof(norm));
+      if (!ok) {
+        throw std::runtime_error("Unicode normalization failed");
+      }
     }
 
     struct dependency {
@@ -191,6 +224,7 @@ namespace polyseed {
     language data::decode(const char* phrase) {
         check_init();
         const polyseed_lang* lang;
+        check_utf8_nfkd(phrase);
         auto status = polyseed_decode(phrase, m_coin, &lang, &m_data);
         if (status != POLYSEED_OK) {
             throw get_error(status);
@@ -239,6 +273,7 @@ namespace polyseed {
 
     void data::crypt(const char* password) {
         check_valid();
+        check_utf8_nfkd(password);
         polyseed_crypt(m_data, password);
     }
 
