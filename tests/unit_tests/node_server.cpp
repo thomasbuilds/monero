@@ -334,7 +334,7 @@ namespace
     boost::filesystem::remove_all(path, ec);
   }
 
-  boost::program_options::variables_map make_regtest_options(const path_t& dir)
+  boost::program_options::variables_map make_regtest_options(const path_t& dir, const std::vector<std::string>& extra = {})
   {
     boost::program_options::options_description desc;
     cryptonote::core::init_options(desc);
@@ -351,6 +351,7 @@ namespace
       "--disable-dns-checkpoints",
       "--offline",
     };
+    args.insert(args.end(), extra.begin(), extra.end());
 
     boost::program_options::variables_map vm;
     boost::program_options::store(
@@ -821,6 +822,27 @@ TEST(node_server, bracketed_ipv6_bind_address)
   peer.connect({boost::asio::ip::address_v6::loopback(), port}, ec);
   EXPECT_FALSE(ec) << ec.message();
   EXPECT_TRUE(server.deinit());
+}
+
+TEST(node_server, anonymous_inbound_waits_for_sync)
+{
+  const path_t dir = create_temp_dir("anonymous-inbound-%%%%%%%%%%%%%%%%");
+  ASSERT_FALSE(dir.empty());
+  const epee::scope_guard cleanup([&dir]{ remove_tree(dir); });
+
+  const std::string onion = "apnlp7dglymbqp6s737ta2srwsgurruvrqsdcw534yfffskl3z5ncuid.onion:18083";
+  const epee::net_utils::network_address address = MONERO_UNWRAP(net::get_network_address(onion, 0));
+  for (const bool synchronized : {false, true})
+  {
+    test_core pr_core;
+    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL, synchronized);
+    Server server(cprotocol);
+    cprotocol.set_p2p_endpoint(&server);
+    ASSERT_TRUE(server.init(make_regtest_options(dir, {"--tx-proxy=tor,127.0.0.1:9050", "--anonymous-inbound=" + onion + ",127.0.0.1:0"})));
+
+    epee::net_utils::i_connection_limit& limit = server;
+    EXPECT_EQ(!synchronized, limit.is_host_limit(address));
+  }
 }
 
 TEST(cryptonote_protocol_handler, race_condition)
@@ -1505,6 +1527,7 @@ TEST(node_server, race_condition)
     bool get_payload_sync_data(payload_t &payload) { return {}; }
     bool on_callback(context_t &context) { return {}; }
     core_events_t &get_core(){ static core_events_t core_events; return core_events;}
+    bool is_synchronized() const { return {}; }
     void log_connections() {}
     connections_t get_connections() { return {}; }
     const block_queue_t &get_block_queue() const {

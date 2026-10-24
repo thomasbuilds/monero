@@ -321,6 +321,9 @@ namespace nodetool
   template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::is_host_limit(const epee::net_utils::network_address &address)
   {
+    if (address.get_zone() != epee::net_utils::zone::public_ && !m_payload_handler.is_synchronized())
+      return true;
+
     const network_zone& zone = m_network_zones.at(address.get_zone());
     if (zone.m_current_number_of_in_peers >= zone.m_config.m_net_config.max_in_connection_count) // in peers limit
     {
@@ -2025,6 +2028,9 @@ namespace nodetool
     bool one_succeeded = false;
     for(auto& zone : m_network_zones)
     {
+      if (zone.first != zone_type::public_ && !m_payload_handler.is_synchronized())
+        continue;
+
       size_t start_conn_count = get_outgoing_connections_count(zone.second);
       if(!zone.second.m_peerlist.get_white_peers_count() && !connect_to_seed(zone.first))
       {
@@ -2653,7 +2659,7 @@ namespace nodetool
     network_zone& zone = m_network_zones.at(zone_type);
 
     //will add self to peerlist if in same zone as outgoing later in this function
-    const bool outgoing_to_same_zone = !context.m_is_income && zone.m_our_address.get_zone() == zone_type;
+    const bool outgoing_to_same_zone = !context.m_is_income && zone.m_our_address.get_zone() == zone_type && m_payload_handler.is_synchronized();
     const uint32_t max_peerlist_size = P2P_DEFAULT_PEERS_IN_HANDSHAKE - (outgoing_to_same_zone ? 1 : 0);
 
     std::vector<peerlist_entry> local_peerlist_new;
@@ -3070,6 +3076,9 @@ namespace nodetool
     for (auto& zone : m_network_zones)
     {
       if (m_payload_handler.needs_new_sync_connections(zone.first))
+        continue;
+
+      if (zone.first != epee::net_utils::zone::public_ && !m_payload_handler.is_synchronized())
         continue;
 
       if (zone.second.m_net_server.is_stop_signal_sent())

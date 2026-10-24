@@ -39,6 +39,12 @@ is specified, then no syncing will take place and only transaction broadcasting
 can occur. It is therefore recommended that `--add-exclusive-node` be combined
 with additional exclusive IPv4 address(es).
 
+Each time `monerod` starts, until it first synchronizes, it refuses
+`--anonymous-inbound` connections and doesn't connect to anonymity network
+peers from its peer lists. Peers given with `--add-exclusive-node` or
+`--add-priority-node` are still connected and see its sync height. With
+`--no-sync` this lasts for the whole run.
+
 
 ## Usage
 
