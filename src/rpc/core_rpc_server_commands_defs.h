@@ -101,7 +101,7 @@ inline const std::string get_rpc_status(const bool trusted_daemon, const std::st
 // advance which version they will stop working with
 // Don't go over 32767 for any of these
 #define CORE_RPC_VERSION_MAJOR 3
-#define CORE_RPC_VERSION_MINOR 19
+#define CORE_RPC_VERSION_MINOR 20
 #define MAKE_CORE_RPC_VERSION(major,minor) (((major)<<16)|(minor))
 #define CORE_RPC_VERSION MAKE_CORE_RPC_VERSION(CORE_RPC_VERSION_MAJOR, CORE_RPC_VERSION_MINOR)
 
@@ -995,6 +995,7 @@ inline const std::string get_rpc_status(const bool trusted_daemon, const std::st
       std::string difficulty;
       uint64_t median_weight;
       uint64_t already_generated_coins;
+      uint64_t min_timestamp;
 
       struct tx_backlog_entry
       {
@@ -1020,6 +1021,7 @@ inline const std::string get_rpc_status(const bool trusted_daemon, const std::st
         KV_SERIALIZE(difficulty)
         KV_SERIALIZE(median_weight)
         KV_SERIALIZE(already_generated_coins)
+        KV_SERIALIZE(min_timestamp)
         KV_SERIALIZE(tx_backlog)
       END_KV_SERIALIZE_MAP()
     };

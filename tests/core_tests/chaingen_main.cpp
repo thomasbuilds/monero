@@ -155,6 +155,9 @@ int main(int argc, char* argv[])
     GENERATE_AND_PLAY(gen_block_ts_alt_window_before_strict);
     GENERATE_AND_PLAY(gen_block_ts_alt_window_strict);
     GENERATE_AND_PLAY(gen_block_difficulty_span_floor);
+    GENERATE_AND_PLAY(gen_block_ts_miner_data_before_strict);
+    GENERATE_AND_PLAY(gen_block_ts_miner_data_strict);
+    GENERATE_AND_PLAY(gen_block_ts_miner_data_parent_strict);
 
     // Transaction verification tests
     GENERATE_AND_PLAY(gen_tx_big_version);

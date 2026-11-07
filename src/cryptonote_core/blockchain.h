@@ -94,7 +94,7 @@ namespace cryptonote
 
   typedef boost::function<void(std::vector<txpool_event>)> TxpoolNotifyCallback;
   typedef boost::function<void(uint64_t /* height */, epee::span<const block> /* blocks */)> BlockNotifyCallback;
-  typedef boost::function<void(uint8_t /* major_version */, uint64_t /* height */, const crypto::hash& /* prev_id */, const crypto::hash& /* seed_hash */, difficulty_type /* diff */, uint64_t /* median_weight */, uint64_t /* already_generated_coins */, const std::vector<tx_block_template_backlog_entry>& /* tx_backlog */)> MinerNotifyCallback;
+  typedef boost::function<void(uint8_t /* major_version */, uint64_t /* height */, const crypto::hash& /* prev_id */, const crypto::hash& /* seed_hash */, difficulty_type /* diff */, uint64_t /* median_weight */, uint64_t /* already_generated_coins */, uint64_t /* min_timestamp */, const std::vector<tx_block_template_backlog_entry>& /* tx_backlog */)> MinerNotifyCallback;
 
   /************************************************************************/
   /*                                                                      */
@@ -397,11 +397,12 @@ namespace cryptonote
      * @param difficulty current mining difficulty
      * @param median_weight current median block weight
      * @param already_generated_coins current emission
+     * @param min_timestamp smallest timestamp the next block may have
      * @param tx_backlog transactions in mempool ready to be mined
      *
      * @return true if block template filled in successfully, else false
      */
-    bool get_miner_data(uint8_t& major_version, uint64_t& height, crypto::hash& prev_id, crypto::hash& seed_hash, difficulty_type& difficulty, uint64_t& median_weight, uint64_t& already_generated_coins, std::vector<tx_block_template_backlog_entry>& tx_backlog);
+    bool get_miner_data(uint8_t& major_version, uint64_t& height, crypto::hash& prev_id, crypto::hash& seed_hash, difficulty_type& difficulty, uint64_t& median_weight, uint64_t& already_generated_coins, uint64_t& min_timestamp, std::vector<tx_block_template_backlog_entry>& tx_backlog);
 
     /**
      * @brief checks if a block is known about with a given hash

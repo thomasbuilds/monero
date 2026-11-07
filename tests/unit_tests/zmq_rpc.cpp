@@ -580,7 +580,7 @@ TEST_F(zmq_pub, JsonFullMinerData)
   static constexpr const char topic[] = "\1json-full-miner_data";
   ASSERT_TRUE(sub_request(topic));
 
-    //std::size_t send_miner_data(uint8_t major_version, uint64_t height, const crypto::hash& prev_id, const crypto::hash& seed_hash, difficulty_type diff, uint64_t median_weight, uint64_t already_generated_coins, const std::vector<tx_block_template_backlog_entry>& tx_backlog);
+    //std::size_t send_miner_data(uint8_t major_version, uint64_t height, const crypto::hash& prev_id, const crypto::hash& seed_hash, difficulty_type diff, uint64_t median_weight, uint64_t already_generated_coins, uint64_t min_timestamp, const std::vector<tx_block_template_backlog_entry>& tx_backlog);
   
   const auto hash = crypto::rand<crypto::hash>();
   const auto seed = crypto::rand<crypto::hash>();
@@ -598,6 +598,7 @@ TEST_F(zmq_pub, JsonFullMinerData)
       "difficulty": ")" + cryptonote::hex(difficulty) + R"(",
       "median_weight": 400,
       "already_generated_coins": 10000,
+      "min_timestamp": 1700000000,
       "tx_backlog": [
         {
           "id": ")" + epee::to_hex::string(epee::as_byte_span(txs.at(0).id)) + R"(",
@@ -610,14 +611,14 @@ TEST_F(zmq_pub, JsonFullMinerData)
         }
       ]
     })";
-  EXPECT_EQ(1u, pub->send_miner_data(100, 200, hash, seed, difficulty, 400, 10000, txs));
+  EXPECT_EQ(1u, pub->send_miner_data(100, 200, hash, seed, difficulty, 400, 10000, 1700000000, txs));
   EXPECT_TRUE(pub->relay_to_pub(relay.get(), dummy_pub.get()));
 
   auto pubs = get_published(dummy_client.get());
   ASSERT_EQ(1u, pubs.size());
   EXPECT_TRUE(compare_miner_data(expected, pubs.front()));
 
-  EXPECT_NO_THROW(cryptonote::listener::zmq_pub::miner_data{pub}(100, 200, hash, seed, difficulty, 400, 10000, txs));
+  EXPECT_NO_THROW(cryptonote::listener::zmq_pub::miner_data{pub}(100, 200, hash, seed, difficulty, 400, 10000, 1700000000, txs));
   EXPECT_TRUE(pub->relay_to_pub(relay.get(), dummy_pub.get()));
 
   pubs = get_published(dummy_client.get());

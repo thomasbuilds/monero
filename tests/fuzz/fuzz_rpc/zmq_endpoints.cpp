@@ -42,6 +42,7 @@ void fuzz_send_miner_data(zmq_pub& pub, FuzzedDataProvider& provider) {
 
   uint64_t median_weight = provider.ConsumeIntegral<uint64_t>();
   uint64_t coins = provider.ConsumeIntegral<uint64_t>();
+  uint64_t min_timestamp = provider.ConsumeIntegral<uint64_t>();
   std::vector<tx_block_template_backlog_entry> backlog;
   size_t count = provider.ConsumeIntegralInRange<size_t>(0, 3);
 
@@ -52,7 +53,7 @@ void fuzz_send_miner_data(zmq_pub& pub, FuzzedDataProvider& provider) {
     backlog.push_back(entry);
   }
 
-  pub.send_miner_data(major, h, prev_id, seed_hash, diff, median_weight, coins, backlog);
+  pub.send_miner_data(major, h, prev_id, seed_hash, diff, median_weight, coins, min_timestamp, backlog);
 }
 
 void fuzz_send_txpool_add(zmq_pub& pub, FuzzedDataProvider& provider) {

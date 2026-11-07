@@ -436,3 +436,20 @@ struct gen_block_ts_alt_window_strict : public gen_block_ts_alt_window_base<true
   bool generate(std::vector<test_event_entry>& events) const;
 };
 template<> struct get_test_options<gen_block_ts_alt_window_strict>: public get_strict_timestamps_test_options<63> {};
+
+template<uint64_t strict_height, bool median_chain>
+struct gen_block_ts_miner_data_base : public test_chain_unit_base
+{
+  gen_block_ts_miner_data_base();
+  bool generate(std::vector<test_event_entry>& events) const;
+  bool check_miner_data(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
+};
+
+struct gen_block_ts_miner_data_before_strict : public gen_block_ts_miner_data_base<100, true> {};
+template<> struct get_test_options<gen_block_ts_miner_data_before_strict>: public get_strict_timestamps_test_options<100> {};
+
+struct gen_block_ts_miner_data_strict : public gen_block_ts_miner_data_base<70, true> {};
+template<> struct get_test_options<gen_block_ts_miner_data_strict>: public get_strict_timestamps_test_options<70> {};
+
+struct gen_block_ts_miner_data_parent_strict : public gen_block_ts_miner_data_base<2, false> {};
+template<> struct get_test_options<gen_block_ts_miner_data_parent_strict>: public get_strict_timestamps_test_options<2> {};
