@@ -82,6 +82,7 @@
 #define DIFFICULTY_LAG                                  15  // !!!
 #define DIFFICULTY_CUT                                  60  // timestamps to cut after sorting
 #define DIFFICULTY_BLOCKS_COUNT                         DIFFICULTY_WINDOW + DIFFICULTY_LAG
+#define DIFFICULTY_SPAN_FLOOR_DIVISOR                   4   // next difficulty <= this many times the kept window average
 
 
 #define CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V1   DIFFICULTY_TARGET_V1 * CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_BLOCKS
@@ -197,6 +198,8 @@ static_assert(CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT >= BLOCKS_SYNCHRONIZING
 #define HF_VERSION_BULLETPROOF_PLUS             15
 #define HF_VERSION_VIEW_TAGS                    15
 #define HF_VERSION_2021_SCALING                 15
+#define HF_VERSION_STRICT_TIMESTAMPS            17
+#define HF_VERSION_DIFFICULTY_SPAN_FLOOR        17
 #define MAX_HF_VERSION                          16 // max version supported by code, not necessarily activated/enabled
 
 #define PER_KB_FEE_QUANTIZATION_DECIMALS        8

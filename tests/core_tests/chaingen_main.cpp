@@ -138,6 +138,23 @@ int main(int argc, char* argv[])
     GENERATE_AND_PLAY(gen_block_is_too_big);
     GENERATE_AND_PLAY(gen_block_invalid_binary_format); // Takes up to 3 hours, if CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW == 500, up to 30 minutes, if CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW == 10
     GENERATE_AND_PLAY(gen_block_late_v1_coinbase_tx);
+    GENERATE_AND_PLAY(gen_block_ts_equal_prev_before_strict);
+    GENERATE_AND_PLAY(gen_block_ts_equal_prev_strict);
+    GENERATE_AND_PLAY(gen_block_ts_equal_median_before_strict);
+    GENERATE_AND_PLAY(gen_block_ts_equal_median_strict);
+    GENERATE_AND_PLAY(gen_block_ts_above_median_strict);
+    GENERATE_AND_PLAY(gen_block_ts_template_strict);
+    GENERATE_AND_PLAY(gen_block_ts_template_below_strict);
+    GENERATE_AND_PLAY(gen_block_ts_template_median_strict);
+    GENERATE_AND_PLAY(gen_block_ts_template_alt_before_strict);
+    GENERATE_AND_PLAY(gen_block_ts_alt_equal_prev_before_strict);
+    GENERATE_AND_PLAY(gen_block_ts_alt_equal_prev_strict);
+    GENERATE_AND_PLAY(gen_block_ts_alt_equal_median_before_strict);
+    GENERATE_AND_PLAY(gen_block_ts_alt_equal_median_strict);
+    GENERATE_AND_PLAY(gen_block_ts_alt_chain_equal_prev_strict);
+    GENERATE_AND_PLAY(gen_block_ts_alt_window_before_strict);
+    GENERATE_AND_PLAY(gen_block_ts_alt_window_strict);
+    GENERATE_AND_PLAY(gen_block_difficulty_span_floor);
 
     // Transaction verification tests
     GENERATE_AND_PLAY(gen_tx_big_version);

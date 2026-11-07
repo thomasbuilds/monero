@@ -264,3 +264,175 @@ struct get_test_options<gen_block_miner_tx_out_has_view_tag_from_hf_view_tags> {
     hard_forks, 0
   };
 };
+
+template<uint64_t strict_height>
+struct get_strict_timestamps_test_options {
+  const std::pair<uint8_t, uint64_t> hard_forks[4] = {std::make_pair(1, 0), std::make_pair(HF_VERSION_STRICT_TIMESTAMPS - 1, 1),
+    std::make_pair(HF_VERSION_STRICT_TIMESTAMPS, strict_height), std::make_pair(0, 0)};
+  const cryptonote::test_options test_options = {
+    hard_forks, 0
+  };
+};
+
+struct gen_block_ts_equal_prev_before_strict : public gen_block_accepted_base<12>
+{
+  bool generate(std::vector<test_event_entry>& events) const;
+};
+template<> struct get_test_options<gen_block_ts_equal_prev_before_strict>: public get_strict_timestamps_test_options<100> {};
+
+struct gen_block_ts_equal_prev_strict : public gen_block_verification_base<11>
+{
+  bool generate(std::vector<test_event_entry>& events) const;
+};
+template<> struct get_test_options<gen_block_ts_equal_prev_strict>: public get_strict_timestamps_test_options<3> {};
+
+struct gen_block_ts_equal_median_before_strict : public gen_block_accepted_base<71>
+{
+  bool generate(std::vector<test_event_entry>& events) const;
+};
+template<> struct get_test_options<gen_block_ts_equal_median_before_strict>: public get_strict_timestamps_test_options<100> {};
+
+struct gen_block_ts_equal_median_strict : public gen_block_verification_base<70>
+{
+  bool generate(std::vector<test_event_entry>& events) const;
+};
+template<> struct get_test_options<gen_block_ts_equal_median_strict>: public get_strict_timestamps_test_options<70> {};
+
+struct gen_block_ts_above_median_strict : public gen_block_accepted_base<71>
+{
+  bool generate(std::vector<test_event_entry>& events) const;
+};
+template<> struct get_test_options<gen_block_ts_above_median_strict>: public get_strict_timestamps_test_options<70> {};
+
+struct gen_block_ts_template_strict : public test_chain_unit_base
+{
+  gen_block_ts_template_strict();
+  bool generate(std::vector<test_event_entry>& events) const;
+  bool check_templates(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
+};
+template<> struct get_test_options<gen_block_ts_template_strict>: public get_strict_timestamps_test_options<2> {};
+
+struct gen_block_ts_template_below_strict : public test_chain_unit_base
+{
+  gen_block_ts_template_below_strict();
+  bool generate(std::vector<test_event_entry>& events) const;
+  bool check_template(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
+};
+template<> struct get_test_options<gen_block_ts_template_below_strict>: public get_strict_timestamps_test_options<68> {};
+
+struct gen_block_ts_template_median_strict : public test_chain_unit_base
+{
+  gen_block_ts_template_median_strict();
+  bool generate(std::vector<test_event_entry>& events) const;
+  bool check_templates(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
+};
+template<> struct get_test_options<gen_block_ts_template_median_strict>: public get_strict_timestamps_test_options<70> {};
+
+struct gen_block_ts_template_alt_before_strict : public test_chain_unit_base
+{
+  gen_block_ts_template_alt_before_strict();
+  bool generate(std::vector<test_event_entry>& events) const;
+  bool check_template(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
+};
+template<> struct get_test_options<gen_block_ts_template_alt_before_strict>: public get_strict_timestamps_test_options<100000> {};
+
+template<size_t alt_idx, bool rejected>
+struct gen_block_ts_alt_base : public test_chain_unit_base
+{
+  gen_block_ts_alt_base()
+  {
+    REGISTER_CALLBACK("check_alt", gen_block_ts_alt_base::check_alt);
+  }
+
+  bool check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*blk*/)
+  {
+    if (event_idx == alt_idx)
+      return rejected ? bvc.m_verifivation_failed : !bvc.m_verifivation_failed && !bvc.m_added_to_main_chain;
+    return !bvc.m_verifivation_failed;
+  }
+
+  bool check_alt(cryptonote::core& c, size_t /*ev_index*/, const std::vector<test_event_entry>& /*events*/)
+  {
+    DEFINE_TESTS_ERROR_CONTEXT("gen_block_ts_alt_base::check_alt");
+    CHECK_EQ(alt_idx, c.get_current_blockchain_height());
+    CHECK_EQ((rejected ? 0u : 1u), c.get_alternative_blocks_count());
+    return true;
+  }
+};
+
+struct gen_block_ts_alt_equal_prev_before_strict : public gen_block_ts_alt_base<12, false>
+{
+  bool generate(std::vector<test_event_entry>& events) const;
+};
+template<> struct get_test_options<gen_block_ts_alt_equal_prev_before_strict>: public get_strict_timestamps_test_options<100> {};
+
+struct gen_block_ts_alt_equal_prev_strict : public gen_block_ts_alt_base<12, true>
+{
+  bool generate(std::vector<test_event_entry>& events) const;
+};
+template<> struct get_test_options<gen_block_ts_alt_equal_prev_strict>: public get_strict_timestamps_test_options<3> {};
+
+struct gen_block_ts_alt_equal_median_before_strict : public gen_block_ts_alt_base<71, false>
+{
+  bool generate(std::vector<test_event_entry>& events) const;
+};
+template<> struct get_test_options<gen_block_ts_alt_equal_median_before_strict>: public get_strict_timestamps_test_options<100> {};
+
+struct gen_block_ts_alt_equal_median_strict : public gen_block_ts_alt_base<71, true>
+{
+  bool generate(std::vector<test_event_entry>& events) const;
+};
+template<> struct get_test_options<gen_block_ts_alt_equal_median_strict>: public get_strict_timestamps_test_options<70> {};
+
+struct gen_block_ts_alt_chain_equal_prev_strict : public test_chain_unit_base
+{
+  gen_block_ts_alt_chain_equal_prev_strict();
+  bool generate(std::vector<test_event_entry>& events) const;
+  bool check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*blk*/);
+  bool check_alt_chain(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
+};
+template<> struct get_test_options<gen_block_ts_alt_chain_equal_prev_strict>: public get_strict_timestamps_test_options<3> {};
+
+struct gen_block_difficulty_span_floor : public test_chain_unit_base
+{
+  gen_block_difficulty_span_floor();
+  bool generate(std::vector<test_event_entry>& events) const;
+  bool check_difficulties(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
+};
+template<> struct get_test_options<gen_block_difficulty_span_floor>: public get_strict_timestamps_test_options<22> {};
+
+template<bool rejected>
+struct gen_block_ts_alt_window_base : public test_chain_unit_base
+{
+  gen_block_ts_alt_window_base()
+  {
+    REGISTER_CALLBACK("check_alt_window", gen_block_ts_alt_window_base::check_alt_window);
+  }
+
+  bool check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*blk*/)
+  {
+    if (event_idx == 126)
+      return rejected ? bvc.m_verifivation_failed : !bvc.m_verifivation_failed && !bvc.m_added_to_main_chain;
+    return !bvc.m_verifivation_failed && (event_idx <= 64 || !bvc.m_added_to_main_chain);
+  }
+
+  bool check_alt_window(cryptonote::core& c, size_t /*ev_index*/, const std::vector<test_event_entry>& /*events*/)
+  {
+    DEFINE_TESTS_ERROR_CONTEXT("gen_block_ts_alt_window_base::check_alt_window");
+    CHECK_EQ(65, c.get_current_blockchain_height());
+    CHECK_EQ((rejected ? 62u : 63u), c.get_alternative_blocks_count());
+    return true;
+  }
+};
+
+struct gen_block_ts_alt_window_before_strict : public gen_block_ts_alt_window_base<false>
+{
+  bool generate(std::vector<test_event_entry>& events) const;
+};
+template<> struct get_test_options<gen_block_ts_alt_window_before_strict>: public get_strict_timestamps_test_options<100> {};
+
+struct gen_block_ts_alt_window_strict : public gen_block_ts_alt_window_base<true>
+{
+  bool generate(std::vector<test_event_entry>& events) const;
+};
+template<> struct get_test_options<gen_block_ts_alt_window_strict>: public get_strict_timestamps_test_options<63> {};

@@ -202,7 +202,7 @@ namespace cryptonote {
       return check_hash_128(hash, difficulty);
   }
 
-  difficulty_type next_difficulty(std::vector<uint64_t> timestamps, std::vector<difficulty_type> cumulative_difficulties, size_t target_seconds) {
+  difficulty_type next_difficulty(std::vector<uint64_t> timestamps, std::vector<difficulty_type> cumulative_difficulties, size_t target_seconds, size_t span_floor_divisor) {
     //cutoff DIFFICULTY_LAG
     if(timestamps.size() > DIFFICULTY_WINDOW)
     {
@@ -230,6 +230,8 @@ namespace cryptonote {
     }
     assert(/*cut_begin >= 0 &&*/ cut_begin + 2 <= cut_end && cut_end <= length);
     uint64_t time_span = timestamps[cut_end - 1] - timestamps[cut_begin];
+    if (span_floor_divisor)
+      time_span = std::max<uint64_t>(time_span, ((cut_end - cut_begin - 1) * target_seconds + span_floor_divisor - 1) / span_floor_divisor);
     if (time_span == 0) {
       time_span = 1;
     }

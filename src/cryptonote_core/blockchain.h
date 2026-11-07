@@ -1563,36 +1563,55 @@ namespace cryptonote
     /**
      * @brief checks a block's timestamp on top of the main chain
      *
-     * This function grabs the timestamps from the most recent <n> blocks,
-     * where n = BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW.  If there are not those many
-     * blocks in the blockchain, the timestamp is assumed to be valid.  If there
-     * are, this function returns:
-     *   true if the block's timestamp is not less than the timestamp of the
-     *       median of the selected blocks
-     *   false otherwise
+     * Checks the timestamp with check_block_timestamp against the most recent
+     * BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW blocks of the main chain, under the
+     * current hard fork version.
      *
      * @param b the block to be checked
-     * @param[out] median_ts_out the median of timestamps (optional)
      *
      * @return true if the block's timestamp is valid, otherwise false
      */
-    bool check_block_timestamp_main_chain(const block& b, uint64_t* median_ts_out = nullptr) const;
+    bool check_block_timestamp_main_chain(const block& b) const;
 
     /**
      * @brief checks a block's timestamp
      *
-     * If the block is not more recent than the median of the recent
-     * timestamps passed here, it is considered invalid. If the block is too
-     * recent, according to the local system clock, it is considered invalid.
+     * A block whose timestamp is beyond the local clock + CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT
+     * is invalid. Given at least BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW timestamps, a block whose
+     * timestamp is less than their median is invalid. From HF_VERSION_STRICT_TIMESTAMPS, the
+     * timestamp must be greater than the parent's timestamp and than the median.
      *
      * @param[inout] timestamps a list of the most recent timestamps to check against
      * @param b the block to be checked
-     * @param[out] median_ts_out the median of `timestamps` (optional)
+     * @param hf_version the consensus rules to apply
+     * @param prev_timestamp the timestamp of the block's parent
      *
      * @return true if the block's timestamp is valid, otherwise false
      */
     static bool check_block_timestamp(std::vector<uint64_t>& timestamps, const block& b,
-      uint64_t* median_ts_out = nullptr);
+      uint8_t hf_version, uint64_t prev_timestamp);
+
+    /**
+     * @brief gets the smallest timestamp check_block_timestamp accepts, ignoring the local clock
+     *
+     * @param[inout] timestamps a list of the most recent timestamps
+     * @param hf_version the consensus rules to apply
+     * @param prev_timestamp the timestamp of the block's parent
+     *
+     * @return the median of `timestamps` (0 with fewer than BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW),
+     *         from HF_VERSION_STRICT_TIMESTAMPS the greater of it and `prev_timestamp`, plus one
+     */
+    static uint64_t get_min_timestamp(std::vector<uint64_t>& timestamps, uint8_t hf_version, uint64_t prev_timestamp);
+
+    /**
+     * @brief gets the smallest timestamp a block on top of the main chain block at height - 1 may have
+     *
+     * @param height the height of the block
+     * @param hf_version the consensus rules to apply
+     *
+     * @return see get_min_timestamp
+     */
+    uint64_t get_min_timestamp_main_chain(uint64_t height, uint8_t hf_version) const;
 
     /**
      * @brief finish an alternate chain's timestamp window from the main chain
