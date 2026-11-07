@@ -1928,7 +1928,8 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     if (hf_version >= HF_VERSION_STRICT_TIMESTAMPS && timestamps.size() > BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW)
       timestamps.resize(BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW);
     const uint64_t prev_timestamp = alt_chain.size() ? alt_chain.back().bl.timestamp : m_db->get_block_timestamp(prev_height);
-    if(!check_block_timestamp(timestamps, b, hf_version, prev_timestamp))
+    const bool future_timestamp = defer_future_time_check(b.timestamp);
+    if(!check_block_timestamp(timestamps, b, hf_version, prev_timestamp, !future_timestamp))
     {
       MERROR_VER("Block with id: " << id << std::endl << " for alternative chain, has invalid timestamp: " << b.timestamp);
       bvc.m_verifivation_failed = true;
@@ -1946,6 +1947,12 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     // Check the block's hash against the difficulty target for its alt chain
     difficulty_type current_diff = get_next_difficulty_for_alternative_chain(alt_chain, bei);
     CHECK_AND_ASSERT_MES(current_diff, false, "!!!!!!! DIFFICULTY OVERHEAD !!!!!!!");
+    if (future_timestamp && current_diff < get_difficulty_for_next_block() / CRYPTONOTE_FUTURE_BLOCKS_MIN_DIFFICULTY_DIVISOR)
+    {
+      MERROR_VER("Block with id: " << id << std::endl << " for alternative chain, has a timestamp too far in the future: " << b.timestamp);
+      bvc.m_verifivation_failed = true;
+      return false;
+    }
     crypto::hash proof_of_work;
     memset(proof_of_work.data, 0xff, sizeof(proof_of_work.data));
     if (b.major_version >= RX_BLOCK_VERSION)
@@ -1984,6 +1991,15 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     {
       MERROR_VER("Block with id: " << epee::string_tools::pod_to_hex(id) << " (as alternative) has incorrect miner transaction.");
       bvc.m_verifivation_failed = true;
+      return false;
+    }
+
+    if (future_timestamp)
+    {
+      MERROR_VER("Block with id: " << id << std::endl << " for alternative chain, has a timestamp too far in the future: " << b.timestamp);
+      add_future_block(id, b.timestamp);
+      bvc.m_verifivation_failed = true;
+      bvc.m_future_timestamp = true;
       return false;
     }
 
@@ -3772,11 +3788,11 @@ uint64_t Blockchain::get_adjusted_time(uint64_t height) const
   return (adjusted_current_block_ts < median_ts ? adjusted_current_block_ts : median_ts);
 }
 //------------------------------------------------------------------
-bool Blockchain::check_block_timestamp(std::vector<uint64_t>& timestamps, const block& b, uint8_t hf_version, uint64_t prev_timestamp)
+bool Blockchain::check_block_timestamp(std::vector<uint64_t>& timestamps, const block& b, uint8_t hf_version, uint64_t prev_timestamp, bool check_future_limit)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
 
-  if(b.timestamp > (uint64_t)time(NULL) + CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT)
+  if(check_future_limit && get_future_time_excess(b.timestamp))
   {
     MERROR_VER("Timestamp of block with id: " << get_block_hash(b) << ", "
       << b.timestamp << ", bigger than local time + 2 hours");
@@ -3807,7 +3823,7 @@ bool Blockchain::check_block_timestamp(std::vector<uint64_t>& timestamps, const 
   return true;
 }
 //------------------------------------------------------------------
-bool Blockchain::check_block_timestamp_main_chain(const block& b) const
+bool Blockchain::check_block_timestamp_main_chain(const block& b, bool check_future_limit) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
 
@@ -3825,7 +3841,7 @@ bool Blockchain::check_block_timestamp_main_chain(const block& b) const
   }
 
   const uint64_t prev_timestamp = timestamps.empty() ? 0 : timestamps.back();
-  return check_block_timestamp(timestamps, b, m_hardfork->get_current_version(), prev_timestamp);
+  return check_block_timestamp(timestamps, b, m_hardfork->get_current_version(), prev_timestamp, check_future_limit);
 }
 //------------------------------------------------------------------
 uint64_t Blockchain::get_min_timestamp(std::vector<uint64_t>& timestamps, uint8_t hf_version, uint64_t prev_timestamp)
@@ -3842,6 +3858,44 @@ uint64_t Blockchain::get_min_timestamp_main_chain(uint64_t height, uint8_t hf_ve
   for (uint64_t h = height - std::min<uint64_t>(height, BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW); h < height; ++h)
     timestamps.push_back(m_db->get_block_timestamp(h));
   return get_min_timestamp(timestamps, hf_version, timestamps.empty() ? 0 : timestamps.back());
+}
+//------------------------------------------------------------------
+uint64_t Blockchain::get_future_time_excess(uint64_t timestamp)
+{
+  const uint64_t limit = (uint64_t)time(NULL) + CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT;
+  return timestamp > limit ? timestamp - limit : 0;
+}
+//------------------------------------------------------------------
+bool Blockchain::defer_future_time_check(uint64_t timestamp)
+{
+  const uint64_t excess = get_future_time_excess(timestamp);
+  if (excess == 0 || excess > CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT)
+    return false;
+  CRITICAL_REGION_LOCAL(m_future_blocks_lock);
+  if (m_future_blocks.size() >= CRYPTONOTE_FUTURE_BLOCKS_MAX_COUNT)
+  {
+    for (auto i = m_future_blocks.begin(); i != m_future_blocks.end(); )
+    {
+      if (get_future_time_excess(i->second) == 0)
+        i = m_future_blocks.erase(i);
+      else
+        ++i;
+    }
+  }
+  return m_future_blocks.size() < CRYPTONOTE_FUTURE_BLOCKS_MAX_COUNT;
+}
+//------------------------------------------------------------------
+void Blockchain::add_future_block(const crypto::hash& id, uint64_t timestamp)
+{
+  CRITICAL_REGION_LOCAL(m_future_blocks_lock);
+  m_future_blocks.emplace(id, timestamp);
+}
+//------------------------------------------------------------------
+bool Blockchain::have_future_block(const crypto::hash& id) const
+{
+  CRITICAL_REGION_LOCAL(m_future_blocks_lock);
+  const auto i = m_future_blocks.find(id);
+  return i != m_future_blocks.end() && get_future_time_excess(i->second) != 0;
 }
 //------------------------------------------------------------------
 bool Blockchain::flush_txes_from_pool(const std::vector<crypto::hash> &txids)
@@ -3918,7 +3972,8 @@ leave:
   TIME_MEASURE_FINISH(t1);
   TIME_MEASURE_START(t2);
 
-  if(!check_block_timestamp_main_chain(bl))
+  const bool future_timestamp = defer_future_time_check(bl.timestamp);
+  if(!check_block_timestamp_main_chain(bl, !future_timestamp))
   {
     MERROR_VER("Block with id: " << id << std::endl << "has invalid timestamp: " << bl.timestamp);
     bvc.m_verifivation_failed = true;
@@ -4019,6 +4074,15 @@ leave:
   {
     MERROR_VER("Block with id: " << id << " failed to pass prevalidation");
     bvc.m_verifivation_failed = true;
+    goto leave;
+  }
+
+  if (future_timestamp)
+  {
+    MERROR_VER("Block with id: " << id << std::endl << "has a timestamp too far in the future: " << bl.timestamp);
+    add_future_block(id, bl.timestamp);
+    bvc.m_verifivation_failed = true;
+    bvc.m_future_timestamp = true;
     goto leave;
   }
 
@@ -4515,6 +4579,14 @@ bool Blockchain::add_new_block(const block& bl, block_verification_context& bvc,
     return false;
   }
 
+  if (have_future_block(id))
+  {
+    LOG_PRINT_L3("block with id = " << id << " is still beyond the future time limit");
+    bvc.m_verifivation_failed = true;
+    bvc.m_future_timestamp = true;
+    return false;
+  }
+
   //check that block refers to chain tail
   if(!(bl.prev_id == get_tail_id()))
   {
@@ -5000,6 +5072,11 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
 
     if (!blocks_exist)
     {
+      size_t npow = 0;
+      while (npow < blocks.size() && get_future_time_excess(blocks[npow].timestamp) == 0)
+        ++npow;
+      if (npow < blocks.size())
+        MINFO("Not precomputing proof of work for " << blocks.size() - npow << " blocks from height " << height + npow << ", beyond the future time limit");
       m_blocks_longhash_table.clear();
       uint64_t thread_height = height;
       tools::threadpool::waiter waiter(tpool);
@@ -5008,8 +5085,8 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
       m_prepare_blocks = &blocks;
       for (unsigned int i = 0; i < threads; i++)
       {
-        unsigned nblocks = batches;
-        if (i < extra)
+        unsigned nblocks = npow / threads;
+        if (i < npow % threads)
           ++nblocks;
         if (nblocks == 0)
           break;

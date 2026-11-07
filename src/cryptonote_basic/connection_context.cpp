@@ -79,6 +79,7 @@ namespace cryptonote
     m_expected_heights.clear();
     m_expected_heights.shrink_to_fit();
     m_requested_objects.clear();
+    m_future_block_wait_start = {};
   }
 
   boost::optional<crypto::hash> cryptonote_connection_context::get_expected_hash(const uint64_t height) const

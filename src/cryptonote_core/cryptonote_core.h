@@ -540,6 +540,13 @@ namespace cryptonote
      bool have_block(const crypto::hash& id, int *where = NULL) const;
 
      /**
+      * @copydoc Blockchain::have_future_block
+      *
+      * @note see Blockchain::have_future_block
+      */
+     bool have_future_block(const crypto::hash& id) const;
+
+     /**
       * @copydoc Blockchain::get_short_chain_history
       *
       * @note see Blockchain::get_short_chain_history

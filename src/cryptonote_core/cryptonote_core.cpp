@@ -1499,6 +1499,11 @@ namespace cryptonote
     return m_blockchain_storage.have_block(id, where);
   }
   //-----------------------------------------------------------------------------------------------
+  bool core::have_future_block(const crypto::hash& id) const
+  {
+    return m_blockchain_storage.have_future_block(id);
+  }
+  //-----------------------------------------------------------------------------------------------
   bool core::get_pool_transactions_info(const std::vector<crypto::hash>& txids, std::vector<std::pair<crypto::hash, tx_memory_pool::tx_details>>& txs, bool include_sensitive_txes) const
   {
     return m_mempool.get_transactions_info(epee::to_span(txids), txs, include_sensitive_txes);

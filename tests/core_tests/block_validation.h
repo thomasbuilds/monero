@@ -453,3 +453,26 @@ template<> struct get_test_options<gen_block_ts_miner_data_strict>: public get_s
 
 struct gen_block_ts_miner_data_parent_strict : public gen_block_ts_miner_data_base<2, false> {};
 template<> struct get_test_options<gen_block_ts_miner_data_parent_strict>: public get_strict_timestamps_test_options<2> {};
+
+struct gen_block_ts_future_flag : public test_chain_unit_base
+{
+  gen_block_ts_future_flag();
+  bool generate(std::vector<test_event_entry>& events) const;
+  bool check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*blk*/);
+  bool check_future_flags(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
+};
+
+struct gen_block_ts_future_cache : public test_chain_unit_base
+{
+  gen_block_ts_future_cache();
+  bool generate(std::vector<test_event_entry>& events) const;
+  bool check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*blk*/);
+  bool wait_for_expiry(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
+  bool check_future_cache(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
+};
+
+struct gen_block_ts_future_low_difficulty_alt : public test_chain_unit_base
+{
+  bool generate(std::vector<test_event_entry>& events) const;
+  bool check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*blk*/);
+};

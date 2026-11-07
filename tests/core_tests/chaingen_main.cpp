@@ -114,6 +114,9 @@ int main(int argc, char* argv[])
     GENERATE_AND_PLAY(gen_block_ts_not_checked);
     GENERATE_AND_PLAY(gen_block_ts_in_past);
     GENERATE_AND_PLAY(gen_block_ts_in_future);
+    GENERATE_AND_PLAY(gen_block_ts_future_flag);
+    GENERATE_AND_PLAY(gen_block_ts_future_cache);
+    GENERATE_AND_PLAY(gen_block_ts_future_low_difficulty_alt);
     GENERATE_AND_PLAY(gen_block_invalid_prev_id);
     GENERATE_AND_PLAY(gen_block_invalid_nonce);
     GENERATE_AND_PLAY(gen_block_no_miner_tx);

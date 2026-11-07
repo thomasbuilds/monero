@@ -45,6 +45,8 @@
 #define CURRENT_BLOCK_MAJOR_VERSION                     1
 #define CURRENT_BLOCK_MINOR_VERSION                     0
 #define CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT              60*60*2
+#define CRYPTONOTE_FUTURE_BLOCKS_MAX_COUNT              256
+#define CRYPTONOTE_FUTURE_BLOCKS_MIN_DIFFICULTY_DIVISOR 2   // remembered alternative blocks need at least the next difficulty / this
 #define CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE             10
 
 #define BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW               60

@@ -28,6 +28,9 @@
 // 
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
+#include <chrono>
+#include <thread>
+
 #include "chaingen.h"
 #include "block_validation.h"
 
@@ -114,6 +117,23 @@ namespace
     for (size_t i = events.size() - BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW; i < events.size(); ++i)
       timestamps.push_back(boost::get<block>(events[i]).timestamp);
     return epee::misc_utils::median(timestamps);
+  }
+
+  bool make_future_test_chain(std::vector<test_event_entry>& events, test_generator& generator, const block& blk_0,
+                              const account_base& miner_account, size_t lift, difficulty_type& diffic)
+  {
+    REWIND_BLOCKS_N(events, blk_0r, blk_0, miner_account, BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW - 1);
+    std::vector<uint64_t> timestamps;
+    std::vector<difficulty_type> cumulative_difficulties;
+    for (size_t i = 1; i < events.size(); ++i)
+    {
+      timestamps.push_back(boost::get<block>(events[i]).timestamp);
+      cumulative_difficulties.push_back(i + 1);
+    }
+    if (!lift_up_difficulty(events, timestamps, cumulative_difficulties, generator, lift, blk_0r, miner_account))
+      return false;
+    diffic = next_difficulty(timestamps, cumulative_difficulties, DIFFICULTY_TARGET_V1);
+    return true;
   }
 
   bool make_strict_ts_median_chain(std::vector<test_event_entry>& events, test_generator& generator, block& blk_last, const block& blk_0,
@@ -1481,3 +1501,178 @@ bool gen_block_ts_miner_data_base<strict_height, median_chain>::check_miner_data
 template struct gen_block_ts_miner_data_base<100, true>;
 template struct gen_block_ts_miner_data_base<70, true>;
 template struct gen_block_ts_miner_data_base<2, false>;
+
+gen_block_ts_future_flag::gen_block_ts_future_flag()
+{
+  REGISTER_CALLBACK_METHOD(gen_block_ts_future_flag, check_future_flags);
+}
+
+bool gen_block_ts_future_flag::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+
+  difficulty_type diffic;
+  CHECK_AND_ASSERT_MES(make_future_test_chain(events, generator, blk_0, miner_account, 1, diffic), false, "Failed to make chain");
+  CHECK_AND_ASSERT_MES(diffic > 1, false, "Difficulty too low for an invalid proof of work");
+  const block blk_1 = boost::get<block>(events.back());
+
+  const auto add_block = [&](uint64_t timestamp, bool bad_pow)
+  {
+    block blk;
+    do
+    {
+      blk = block();
+      if (!generator.construct_block_manually(blk, blk_1, miner_account, test_generator::bf_diffic | test_generator::bf_timestamp, 0, 0, timestamp++, crypto::hash(), diffic))
+        return false;
+    }
+    while (bad_pow && blk.nonce == 0);
+    if (bad_pow)
+    {
+      --blk.nonce;
+      blk.invalidate_hashes();
+    }
+    events.push_back(blk);
+    return true;
+  };
+
+  const uint64_t future = time(NULL) + 60*60 + CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT;
+  const uint64_t far_future = time(NULL) + 60*60 + 2 * CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT;
+  CHECK_AND_ASSERT_MES(add_block(future, false), false, "Failed to make block");
+  const block blk_future = boost::get<block>(events.back());
+  CHECK_AND_ASSERT_MES(add_block(future, true), false, "Failed to make block");
+  events.push_back(events.back());
+  CHECK_AND_ASSERT_MES(add_block(boost::get<block>(events[BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW / 2 - 1]).timestamp, false), false, "Failed to make block");
+  CHECK_AND_ASSERT_MES(add_block(far_future, false), false, "Failed to make block");
+  CHECK_AND_ASSERT_MES(add_block(far_future, true), false, "Failed to make block");
+  events.push_back(blk_future);
+  CHECK_AND_ASSERT_MES(add_block(blk_1.timestamp + DIFFICULTY_TARGET_V1, false), false, "Failed to make block");
+  CHECK_AND_ASSERT_MES(add_block(future, false), false, "Failed to make block");
+  const block blk_alt_future = boost::get<block>(events.back());
+  CHECK_AND_ASSERT_MES(add_block(future, true), false, "Failed to make block");
+  events.push_back(events.back());
+  CHECK_AND_ASSERT_MES(add_block(far_future, false), false, "Failed to make block");
+  events.push_back(blk_alt_future);
+
+  DO_CALLBACK(events, "check_future_flags");
+
+  return true;
+}
+
+bool gen_block_ts_future_flag::check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*blk*/)
+{
+  switch (event_idx)
+  {
+    case BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW + 1:
+    case BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW + 7:
+    case BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW + 9:
+    case BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW + 13:
+      return bvc.m_verifivation_failed && bvc.m_future_timestamp && !bvc.m_bad_pow;
+    case BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW + 2:
+    case BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW + 3:
+    case BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW + 10:
+    case BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW + 11:
+      return bvc.m_verifivation_failed && !bvc.m_future_timestamp && bvc.m_bad_pow;
+    case BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW + 4:
+    case BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW + 5:
+    case BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW + 6:
+    case BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW + 12:
+      return bvc.m_verifivation_failed && !bvc.m_future_timestamp && !bvc.m_bad_pow;
+    default:
+      return !bvc.m_verifivation_failed && !bvc.m_future_timestamp;
+  }
+}
+
+bool gen_block_ts_future_flag::check_future_flags(cryptonote::core& c, size_t /*ev_index*/, const std::vector<test_event_entry>& /*events*/)
+{
+  DEFINE_TESTS_ERROR_CONTEXT("gen_block_ts_future_flag::check_future_flags");
+
+  CHECK_EQ(BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW + 2, c.get_current_blockchain_height());
+  CHECK_EQ(0, c.get_alternative_blocks_count());
+  CHECK_EQ(0, c.get_pool_transactions_count());
+
+  return true;
+}
+
+gen_block_ts_future_cache::gen_block_ts_future_cache()
+{
+  REGISTER_CALLBACK_METHOD(gen_block_ts_future_cache, wait_for_expiry);
+  REGISTER_CALLBACK_METHOD(gen_block_ts_future_cache, check_future_cache);
+}
+
+bool gen_block_ts_future_cache::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+
+  const auto make_block = [&](uint64_t timestamp)
+  {
+    block blk;
+    if (!generator.construct_block_manually(blk, blk_0, miner_account, test_generator::bf_timestamp, 0, 0, timestamp))
+      throw std::runtime_error("Failed to make block");
+    return blk;
+  };
+
+  const uint64_t limit = time(NULL) + CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT;
+  events.push_back(make_block(limit + 60));
+  for (uint64_t i = 1; i < CRYPTONOTE_FUTURE_BLOCKS_MAX_COUNT; ++i)
+    events.push_back(make_block(limit + 1800 + i));
+  const block blk_more = make_block(limit + 1800 + CRYPTONOTE_FUTURE_BLOCKS_MAX_COUNT);
+  events.push_back(blk_more);
+  events.push_back(events[2]);
+  DO_CALLBACK(events, "wait_for_expiry");
+  events.push_back(events[1]);
+  events.push_back(make_block(limit + 1800 + CRYPTONOTE_FUTURE_BLOCKS_MAX_COUNT + 1));
+  events.push_back(blk_more);
+  DO_CALLBACK(events, "check_future_cache");
+
+  return true;
+}
+
+bool gen_block_ts_future_cache::check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*blk*/)
+{
+  if (event_idx == 0)
+    return !bvc.m_verifivation_failed;
+  if (event_idx == CRYPTONOTE_FUTURE_BLOCKS_MAX_COUNT + 4)
+    return !bvc.m_verifivation_failed && bvc.m_added_to_main_chain;
+  const bool remembered = event_idx <= CRYPTONOTE_FUTURE_BLOCKS_MAX_COUNT + 5 && event_idx != CRYPTONOTE_FUTURE_BLOCKS_MAX_COUNT + 1;
+  return bvc.m_verifivation_failed && !bvc.m_bad_pow && bvc.m_future_timestamp == remembered;
+}
+
+bool gen_block_ts_future_cache::wait_for_expiry(cryptonote::core& /*c*/, size_t /*ev_index*/, const std::vector<test_event_entry>& events)
+{
+  const uint64_t timestamp = boost::get<block>(events[1]).timestamp;
+  while (timestamp > (uint64_t)time(NULL) + CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT)
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+  return true;
+}
+
+bool gen_block_ts_future_cache::check_future_cache(cryptonote::core& c, size_t /*ev_index*/, const std::vector<test_event_entry>& /*events*/)
+{
+  DEFINE_TESTS_ERROR_CONTEXT("gen_block_ts_future_cache::check_future_cache");
+
+  CHECK_EQ(2, c.get_current_blockchain_height());
+  CHECK_EQ(0, c.get_alternative_blocks_count());
+
+  return true;
+}
+
+bool gen_block_ts_future_low_difficulty_alt::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+
+  difficulty_type diffic;
+  CHECK_AND_ASSERT_MES(make_future_test_chain(events, generator, blk_0, miner_account, 50, diffic), false, "Failed to make chain");
+  CHECK_AND_ASSERT_MES(diffic / CRYPTONOTE_FUTURE_BLOCKS_MIN_DIFFICULTY_DIVISOR > 1, false, "Difficulty too low");
+  block blk_alt;
+  CHECK_AND_ASSERT_MES(generator.construct_block_manually(blk_alt, blk_0, miner_account, test_generator::bf_timestamp, 0, 0,
+    time(NULL) + 60*60 + CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT), false, "Failed to make block");
+  events.push_back(blk_alt);
+
+  return true;
+}
+
+bool gen_block_ts_future_low_difficulty_alt::check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*blk*/)
+{
+  if (event_idx == BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW + 50)
+    return bvc.m_verifivation_failed && !bvc.m_future_timestamp && !bvc.m_bad_pow;
+  return !bvc.m_verifivation_failed;
+}

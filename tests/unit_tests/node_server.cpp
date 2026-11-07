@@ -78,6 +78,7 @@ public:
   bool get_short_chain_history(std::list<crypto::hash>& ids, uint64_t& current_height) const { return true; }
   bool have_block(const crypto::hash& id, int *where = NULL) const {return false;}
   bool have_block_unlocked(const crypto::hash& id, int *where = NULL) const {return false;}
+  bool have_future_block(const crypto::hash& id) const {return false;}
   void get_blockchain_top(uint64_t& height, crypto::hash& top_id)const{height=0;top_id=crypto::null_hash;}
   bool handle_incoming_tx(const cryptonote::blobdata& tx_blob, cryptonote::tx_verification_context& tvc, cryptonote::relay_method tx_relay, bool relayed) { return true; }
   bool handle_single_incoming_block(const cryptonote::blobdata& block_blob, const cryptonote::block *b, cryptonote::block_verification_context& bvc, cryptonote::pool_supplement& extra_block_txs, bool update_miner_blocktemplate = true) { return true; }
@@ -294,6 +295,165 @@ TEST(cryptonote_protocol_handler, unknown_top_starts_synchronizing)
   EXPECT_TRUE(result.accepted);
   EXPECT_EQ(result.state, cryptonote::cryptonote_connection_context::state_synchronizing);
   EXPECT_EQ(result.fail_score, 0u);
+}
+
+namespace
+{
+  class future_block_test_core : public test_core
+  {
+  public:
+    std::vector<crypto::hash> known;
+    crypto::hash future{};
+
+    bool have_block_unlocked(const crypto::hash& id, int *where = NULL) const
+    {
+      return std::find(known.begin(), known.end(), id) != known.end();
+    }
+    bool have_future_block(const crypto::hash& id) const { return id == future; }
+  };
+
+  class future_span_test_core : public test_core
+  {
+  public:
+    crypto::hash parent{};
+
+    using test_core::handle_incoming_block;
+    bool have_block(const crypto::hash& id, int *where = NULL) const { return id == parent; }
+    uint64_t get_target_blockchain_height() const { return 2; }
+    bool handle_incoming_block(const cryptonote::blobdata& block_blob, const cryptonote::block *block, cryptonote::block_verification_context& bvc, cryptonote::pool_supplement& extra_block_txs, bool update_miner_blocktemplate = true)
+    {
+      bvc.m_verifivation_failed = true;
+      bvc.m_future_timestamp = true;
+      return false;
+    }
+  };
+
+  struct future_block_test_p2p : known_top_test_p2p
+  {
+    unsigned drops = 0;
+    unsigned chain_requests = 0;
+
+    bool drop_connection(const epee::net_utils::connection_context_base&) override
+    {
+      ++drops;
+      return true;
+    }
+    bool invoke_notify_to_peer(int command, epee::levin::message_writer, const epee::net_utils::connection_context_base&) override
+    {
+      if (command == cryptonote::NOTIFY_REQUEST_CHAIN::ID)
+        ++chain_requests;
+      return true;
+    }
+  };
+}
+
+TEST(cryptonote_protocol_handler, future_block_wait_skips_known_blocks)
+{
+  future_block_test_core core;
+  nodetool::p2p_endpoint_stub<cryptonote::cryptonote_connection_context> p2p;
+  cryptonote::t_cryptonote_protocol_handler<future_block_test_core> handler{core, &p2p};
+  cryptonote::cryptonote_connection_context context;
+  for (uint8_t i = 1; i <= 3; ++i)
+  {
+    crypto::hash id{};
+    id.data[0] = i;
+    core.known.push_back(id);
+    context.m_needed_objects.emplace_back(id, 0);
+  }
+  core.future.data[0] = 4;
+  context.m_needed_objects.emplace_back(core.future, 0);
+  context.m_state = cryptonote::cryptonote_connection_context::state_standby;
+  ++context.m_callback_request_count;
+
+  ASSERT_TRUE(handler.on_callback(context));
+  EXPECT_EQ(context.m_state, cryptonote::cryptonote_connection_context::state_standby);
+  ASSERT_EQ(context.m_needed_objects.size(), 1u);
+  EXPECT_EQ(context.m_needed_objects.front().first, core.future);
+  EXPECT_NE(context.m_future_block_wait_start, std::chrono::steady_clock::time_point{});
+}
+
+TEST(cryptonote_protocol_handler, future_block_wait_drops_connection_after_max_time)
+{
+  future_block_test_core core;
+  future_block_test_p2p p2p;
+  cryptonote::t_cryptonote_protocol_handler<future_block_test_core> handler{core, &p2p};
+  cryptonote::cryptonote_connection_context context;
+  core.future.data[0] = 1;
+  context.m_needed_objects.emplace_back(core.future, 0);
+  const auto wait = [&](unsigned seconds)
+  {
+    context.m_future_block_wait_start = std::chrono::steady_clock::now() - std::chrono::seconds(seconds);
+    context.m_state = cryptonote::cryptonote_connection_context::state_standby;
+    ++context.m_callback_request_count;
+    return handler.on_callback(context);
+  };
+
+  ASSERT_TRUE(wait(FUTURE_BLOCK_WAIT_MAX_TIME - 10));
+  EXPECT_EQ(p2p.drops, 0u);
+  ASSERT_TRUE(wait(FUTURE_BLOCK_WAIT_MAX_TIME + 1));
+  EXPECT_EQ(p2p.drops, 1u);
+  EXPECT_EQ(p2p.fail_score, 0u);
+}
+
+TEST(cryptonote_protocol_handler, future_block_wait_ends_when_next_block_is_not_future)
+{
+  future_block_test_core core;
+  nodetool::p2p_endpoint_stub<cryptonote::cryptonote_connection_context> p2p;
+  cryptonote::t_cryptonote_protocol_handler<future_block_test_core> handler{core, &p2p};
+  cryptonote::cryptonote_connection_context context;
+  crypto::hash id{};
+  id.data[0] = 1;
+  context.m_needed_objects.emplace_back(id, 0);
+  context.m_last_response_height = 1;
+  context.m_future_block_wait_start = std::chrono::steady_clock::now();
+  context.m_state = cryptonote::cryptonote_connection_context::state_standby;
+  ++context.m_callback_request_count;
+
+  ASSERT_TRUE(handler.on_callback(context));
+  EXPECT_EQ(context.m_requested_objects.count(id), 1u);
+  EXPECT_EQ(context.m_future_block_wait_start, std::chrono::steady_clock::time_point{});
+}
+
+TEST(cryptonote_protocol_handler, future_block_in_own_span_requests_chain)
+{
+  future_span_test_core core;
+  future_block_test_p2p p2p;
+  cryptonote::t_cryptonote_protocol_handler<future_span_test_core> handler{core, &p2p};
+  cryptonote::cryptonote_connection_context context;
+  core.parent.data[0] = 1;
+  cryptonote::block b{};
+  b.prev_id = core.parent;
+  b.miner_tx.version = 1;
+  b.miner_tx.vin.push_back(cryptonote::txin_gen{1});
+  cryptonote::NOTIFY_RESPONSE_GET_OBJECTS::request response{};
+  response.blocks.emplace_back();
+  response.blocks.back().block = cryptonote::block_to_blob(b);
+  response.current_blockchain_height = 2;
+  crypto::hash id;
+  ASSERT_TRUE(cryptonote::parse_and_validate_block_from_blob(response.blocks.back().block, b, id));
+  context.m_expected_heights = {core.parent, id};
+  context.m_requested_objects.insert(id);
+  context.m_expect_height = 1;
+  context.m_expect_response = cryptonote::NOTIFY_RESPONSE_GET_OBJECTS::ID;
+  context.m_last_request_time = boost::posix_time::microsec_clock::universal_time();
+  context.m_state = cryptonote::cryptonote_connection_context::state_synchronizing;
+  epee::byte_slice message;
+  ASSERT_TRUE(epee::serialization::store_t_to_binary(response, message));
+  epee::byte_stream out;
+  bool handled = false;
+
+  EXPECT_EQ(handler.handle_invoke_map(true, cryptonote::NOTIFY_RESPONSE_GET_OBJECTS::ID, epee::to_span(message), out, context, handled), 1);
+  EXPECT_EQ(p2p.chain_requests, 1u);
+  EXPECT_EQ(p2p.drops, 0u);
+  EXPECT_TRUE(context.m_expect_response == cryptonote::NOTIFY_RESPONSE_CHAIN_ENTRY::ID);
+}
+
+TEST(cryptonote_protocol_handler, set_state_normal_ends_future_block_wait)
+{
+  cryptonote::cryptonote_connection_context context;
+  context.m_future_block_wait_start = std::chrono::steady_clock::now();
+  context.set_state_normal();
+  EXPECT_EQ(context.m_future_block_wait_start, std::chrono::steady_clock::time_point{});
 }
 
 TEST(node_server, anonymous_inbound_bind_port)

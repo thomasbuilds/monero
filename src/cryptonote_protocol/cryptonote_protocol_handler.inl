@@ -84,6 +84,7 @@
 #define DROP_ON_SYNC_WEDGE_THRESHOLD (30 * 1000000000ull) // nanoseconds
 #define LAST_ACTIVITY_STALL_THRESHOLD (2.0f) // seconds
 #define DROP_PEERS_ON_SCORE -2
+#define FUTURE_BLOCK_WAIT_MAX_TIME 300 // seconds
 
 namespace cryptonote
 {
@@ -658,7 +659,7 @@ namespace cryptonote
       extra_block_txs);
 
     // handle result of attempted block add
-    if (!handle_block_res || bvc.m_verifivation_failed)
+    if (!handle_block_res || (bvc.m_verifivation_failed && !bvc.m_future_timestamp))
     {
       if (bvc.m_missing_txs)
       {
@@ -718,7 +719,7 @@ namespace cryptonote
       arg.b.txs.clear();
       relay_block(arg, context);
     }
-    else if( bvc.m_marked_as_orphaned )
+    else if( bvc.m_marked_as_orphaned || bvc.m_future_timestamp )
     {
       context.m_needed_objects.clear();
       context.m_state = cryptonote_connection_context::state_synchronizing;
@@ -1558,6 +1559,35 @@ namespace cryptonote
               block_txs,
               false); // <--- process block
 
+            if(bvc.m_future_timestamp)
+            {
+              m_block_queue.flush_spans(span_connection_id, true);
+              if (span_connection_id == context.m_connection_id)
+              {
+                LOG_PRINT_CCONTEXT_L1("Block beyond our future time limit, requesting chain again");
+                context.m_needed_objects.clear();
+                context.m_last_response_height = 0;
+                context.m_last_known_hash = crypto::null_hash;
+                NOTIFY_REQUEST_CHAIN::request r = {};
+                m_core.get_short_chain_history(r.block_ids, context.m_expect_height);
+                handler_request_blocks_history(r.block_ids);
+                r.prune = m_sync_pruned_blocks;
+                context.m_last_request_time = boost::posix_time::microsec_clock::universal_time();
+                context.m_expect_response = NOTIFY_RESPONSE_CHAIN_ENTRY::ID;
+                MLOG_P2P_MESSAGE("-->>NOTIFY_REQUEST_CHAIN: m_block_ids.size()=" << r.block_ids.size());
+                post_notify<NOTIFY_REQUEST_CHAIN>(r, context);
+                MLOG_PEER_STATE("requesting chain");
+                return 1;
+              }
+              if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t f)->bool{
+                LOG_PRINT_CCONTEXT_L1("Block beyond our future time limit, dropping connection");
+                drop_connection(context, false, true);
+                return 1;
+              }))
+                LOG_ERROR_CCONTEXT("span connection id not found");
+              context.m_state = cryptonote_connection_context::state_standby;
+              return 1;
+            }
             if(bvc.m_verifivation_failed)
             {
               drop_connections(span_origin);
@@ -2028,6 +2058,28 @@ skip:
   template<class t_core>
   bool t_cryptonote_protocol_handler<t_core>::request_missing_objects(cryptonote_connection_context& context, bool check_having_blocks, bool force_next_span)
   {
+    const auto next = std::find_if(context.m_needed_objects.begin(), context.m_needed_objects.end(), [this](const std::pair<crypto::hash, uint64_t> &o) {
+      return !m_block_queue.have(o.first) && !m_core.have_block_unlocked(o.first);
+    });
+    if (next != context.m_needed_objects.end() && m_core.have_future_block(next->first))
+    {
+      const auto now = std::chrono::steady_clock::now();
+      if (context.m_future_block_wait_start == std::chrono::steady_clock::time_point{})
+      {
+        MINFO(context << " next block " << next->first << " is beyond our future time limit, waiting");
+        context.m_future_block_wait_start = now;
+      }
+      else if (now - context.m_future_block_wait_start > std::chrono::seconds(FUTURE_BLOCK_WAIT_MAX_TIME))
+      {
+        MINFO(context << " next block " << next->first << " still beyond our future time limit, dropping connection");
+        return false;
+      }
+      context.m_needed_objects.erase(context.m_needed_objects.begin(), next);
+      context.m_state = cryptonote_connection_context::state_standby;
+      return true;
+    }
+    context.m_future_block_wait_start = {};
+
     // flush stale spans
     std::set<boost::uuids::uuid> live_connections;
     m_p2p->for_each_connection([&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t support_flags)->bool{

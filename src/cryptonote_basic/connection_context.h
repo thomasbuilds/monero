@@ -33,6 +33,7 @@
 #include <unordered_set>
 #include <atomic>
 #include <algorithm>
+#include <chrono>
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/optional/optional_fwd.hpp>
 #include "net/net_utils_base.h"
@@ -118,6 +119,7 @@ namespace cryptonote
     size_t m_num_requested;
     copyable_atomic m_new_stripe_notification{0};
     copyable_atomic m_idle_peer_notification{0};
+    std::chrono::steady_clock::time_point m_future_block_wait_start{};
   };
 
   inline std::string get_protocol_state_string(cryptonote_connection_context::state s)

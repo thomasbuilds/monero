@@ -419,6 +419,16 @@ namespace cryptonote
     bool have_block(const crypto::hash& id, int *where = NULL) const;
 
     /**
+     * @brief checks if a block was rejected, after its proof of work was checked, because its
+     *        timestamp is beyond the future time limit
+     *
+     * @param id the hash to search for
+     *
+     * @return true if such a block's timestamp is still beyond the limit
+     */
+    bool have_future_block(const crypto::hash& id) const;
+
+    /**
      * @brief gets the total number of transactions on the main chain
      *
      * @return the number of transactions on the main chain
@@ -1226,6 +1236,9 @@ namespace cryptonote
     // some invalid blocks
     blocks_ext_by_hash m_invalid_blocks;     // crypto::hash -> block_extended_info
 
+    std::unordered_map<crypto::hash, uint64_t> m_future_blocks; // crypto::hash -> timestamp
+    mutable epee::critical_section m_future_blocks_lock;
+
 
     checkpoints m_checkpoints;
     bool m_enforce_dns_checkpoints;
@@ -1569,10 +1582,11 @@ namespace cryptonote
      * current hard fork version.
      *
      * @param b the block to be checked
+     * @param check_future_limit whether to check the timestamp against the local clock
      *
      * @return true if the block's timestamp is valid, otherwise false
      */
-    bool check_block_timestamp_main_chain(const block& b) const;
+    bool check_block_timestamp_main_chain(const block& b, bool check_future_limit) const;
 
     /**
      * @brief checks a block's timestamp
@@ -1586,11 +1600,12 @@ namespace cryptonote
      * @param b the block to be checked
      * @param hf_version the consensus rules to apply
      * @param prev_timestamp the timestamp of the block's parent
+     * @param check_future_limit whether to check the timestamp against the local clock
      *
      * @return true if the block's timestamp is valid, otherwise false
      */
     static bool check_block_timestamp(std::vector<uint64_t>& timestamps, const block& b,
-      uint8_t hf_version, uint64_t prev_timestamp);
+      uint8_t hf_version, uint64_t prev_timestamp, bool check_future_limit);
 
     /**
      * @brief gets the smallest timestamp check_block_timestamp accepts, ignoring the local clock
@@ -1613,6 +1628,35 @@ namespace cryptonote
      * @return see get_min_timestamp
      */
     uint64_t get_min_timestamp_main_chain(uint64_t height, uint8_t hf_version) const;
+
+    /**
+     * @brief how far a timestamp is beyond the future time limit
+     *
+     * @param timestamp the block timestamp
+     *
+     * @return the number of seconds the timestamp is later than the local clock +
+     *         CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT, or 0 if it is not later
+     */
+    static uint64_t get_future_time_excess(uint64_t timestamp);
+
+    /**
+     * @brief whether to check the future time limit of a block after its proof of work
+     *
+     * @param timestamp the block timestamp
+     *
+     * @return true if the timestamp is beyond the future time limit by at most
+     *         CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT and another block can be remembered
+     */
+    bool defer_future_time_check(uint64_t timestamp);
+
+    /**
+     * @brief remembers a block rejected, after its proof of work was checked, because its
+     *        timestamp is beyond the future time limit
+     *
+     * @param id the block hash
+     * @param timestamp the block timestamp
+     */
+    void add_future_block(const crypto::hash& id, uint64_t timestamp);
 
     /**
      * @brief finish an alternate chain's timestamp window from the main chain
