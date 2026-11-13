@@ -1297,3 +1297,60 @@ bool gen_block_ts_template_tip::check_templates(cryptonote::core& c, size_t ev_i
 
   return true;
 }
+
+template<uint64_t height, bool median_chain>
+gen_block_ts_miner_data_base<height, median_chain>::gen_block_ts_miner_data_base()
+{
+  REGISTER_CALLBACK_METHOD(gen_block_ts_miner_data_base, check_miner_data);
+}
+
+template<uint64_t height, bool median_chain>
+bool gen_block_ts_miner_data_base<height, median_chain>::generate(std::vector<test_event_entry>& events) const
+{
+  STRICT_TS_INIT_GENERATE();
+
+  CHECK_AND_ASSERT_MES(median_chain ? make_strict_ts_base_chain(events, generator, blk_last, miner_account, strict_height, true)
+    : make_strict_ts_test_chain(events, generator, blk_last, miner_account, strict_height, 70, blk_last.timestamp + 70 * 2 * DIFFICULTY_TARGET_V2, 2 * DIFFICULTY_TARGET_V2),
+    false, "Failed to make chain");
+
+  DO_CALLBACK(events, "check_miner_data");
+
+  return true;
+}
+
+template<uint64_t height, bool median_chain>
+bool gen_block_ts_miner_data_base<height, median_chain>::check_miner_data(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events)
+{
+  DEFINE_TESTS_ERROR_CONTEXT("gen_block_ts_miner_data_base::check_miner_data");
+
+  uint8_t major_version;
+  uint64_t next_height, median_weight, already_generated_coins, min_timestamp;
+  crypto::hash prev_id, seed_hash;
+  difficulty_type diffic;
+  std::vector<tx_block_template_backlog_entry> tx_backlog;
+  CHECK_TEST_CONDITION(c.get_miner_data(major_version, next_height, prev_id, seed_hash, diffic, median_weight, already_generated_coins, min_timestamp, tx_backlog));
+  const uint64_t median = median_timestamp(events, ev_index);
+  const uint64_t parent = boost::get<block>(events[ev_index - 1]).timestamp;
+  CHECK_TEST_CONDITION(major_version == (next_height >= strict_height ? HF_VERSION_STRICT_TIMESTAMPS : HF_VERSION_STRICT_TIMESTAMPS - 1));
+  const uint64_t expected = next_height > strict_height ? parent + 1 : next_height == strict_height ? median - first_strict_ts_slack : median;
+  CHECK_EQ(min_timestamp, expected);
+
+  // a block is valid from min_timestamp on, and the next block's is notified
+  block b;
+  CHECK_TEST_CONDITION(get_test_block_template(c, nullptr, b, diffic));
+  CHECK_TEST_CONDITION(handle_test_block(c, b, min_timestamp - 1).m_verifivation_failed);
+  const auto notified_min_timestamp = std::make_shared<uint64_t>(0);
+  c.get_blockchain_storage().add_miner_notify([notified_min_timestamp](uint8_t, uint64_t, const crypto::hash&, const crypto::hash&, difficulty_type, uint64_t, uint64_t, uint64_t notified, const std::vector<tx_block_template_backlog_entry>&)
+  {
+    *notified_min_timestamp = notified;
+  });
+  CHECK_TEST_CONDITION(added_to_main_chain(handle_test_block(c, b, min_timestamp)));
+  CHECK_TEST_CONDITION(c.get_miner_data(major_version, next_height, prev_id, seed_hash, diffic, median_weight, already_generated_coins, min_timestamp, tx_backlog));
+  CHECK_EQ(*notified_min_timestamp, min_timestamp);
+
+  return true;
+}
+
+template struct gen_block_ts_miner_data_base<100, true>;
+template struct gen_block_ts_miner_data_base<70, true>;
+template struct gen_block_ts_miner_data_base<2, false>;

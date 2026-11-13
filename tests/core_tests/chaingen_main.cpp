@@ -140,6 +140,9 @@ int main(int argc, char* argv[])
     GENERATE_AND_PLAY(gen_block_ts_template_first_strict_median);
     GENERATE_AND_PLAY(gen_block_ts_template_alt_before_strict);
     GENERATE_AND_PLAY(gen_block_ts_template_tip);
+    GENERATE_AND_PLAY(gen_block_ts_miner_data_before_strict);
+    GENERATE_AND_PLAY(gen_block_ts_miner_data_first_strict);
+    GENERATE_AND_PLAY(gen_block_ts_miner_data_strict);
     GENERATE_AND_PLAY(gen_block_invalid_prev_id);
     GENERATE_AND_PLAY(gen_block_invalid_nonce);
     GENERATE_AND_PLAY(gen_block_no_miner_tx);

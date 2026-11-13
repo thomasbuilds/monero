@@ -38,6 +38,10 @@
         },
         "major_version": { "$ref": "#/definitions/uint8" },
         "median_weight": { "$ref": "#/definitions/uint64" },
+        "min_timestamp": {
+            "description": "Smallest timestamp the block being mined may have",
+            "$ref": "#/definitions/uint64"
+        },
         "prev_id": {
             "description": "The cryptographic hash of the last block",
             "$ref": "#/definitions/binary32"
@@ -63,6 +67,7 @@
         "height",
         "major_version",
         "median_weight",
+        "min_timestamp",
         "prev_id",
         "seed_hash"
     ]

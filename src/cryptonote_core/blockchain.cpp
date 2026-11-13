@@ -1749,8 +1749,12 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
   return create_block_template(b, NULL, miner_address, diffic, height, expected_reward, cumulative_weight, ex_nonce, seed_height, seed_hash, include_sensitive);
 }
 //------------------------------------------------------------------
-bool Blockchain::get_miner_data(uint8_t& major_version, uint64_t& height, crypto::hash& prev_id, crypto::hash& seed_hash, difficulty_type& difficulty, uint64_t& median_weight, uint64_t& already_generated_coins, std::vector<tx_block_template_backlog_entry>& tx_backlog)
+bool Blockchain::get_miner_data(uint8_t& major_version, uint64_t& height, crypto::hash& prev_id, crypto::hash& seed_hash, difficulty_type& difficulty, uint64_t& median_weight, uint64_t& already_generated_coins, uint64_t& min_timestamp, std::vector<tx_block_template_backlog_entry>& tx_backlog)
 {
+  m_tx_pool.lock();
+  const epee::scope_guard unlock_guard([&]() { m_tx_pool.unlock(); });
+  CRITICAL_REGION_LOCAL(m_blockchain_lock);
+
   prev_id = m_db->top_block_hash(&height);
   ++height;
 
@@ -1767,6 +1771,7 @@ bool Blockchain::get_miner_data(uint8_t& major_version, uint64_t& height, crypto
   difficulty = get_difficulty_for_next_block();
   median_weight = m_current_block_cumul_weight_median;
   already_generated_coins = m_db->get_block_already_generated_coins(height - 1);
+  min_timestamp = get_min_timestamp_main_chain();
 
   return m_tx_pool.get_block_template_backlog(median_weight, already_generated_coins, major_version,
     DEFAULT_RPC_TX_BACKLOG_OVERPICK, /*include_sensitive=*/false, tx_backlog);
@@ -5596,6 +5601,7 @@ void Blockchain::send_miner_notifications(uint64_t height, const crypto::hash &s
   const uint8_t major_version = m_hardfork->get_ideal_version(height);
   const difficulty_type diff = get_difficulty_for_next_block();
   const uint64_t median_weight = m_current_block_cumul_weight_median;
+  const uint64_t min_timestamp = get_min_timestamp_main_chain();
   const float overpick = DEFAULT_RPC_TX_BACKLOG_OVERPICK;
 
   std::vector<tx_block_template_backlog_entry> tx_backlog;
@@ -5611,7 +5617,7 @@ void Blockchain::send_miner_notifications(uint64_t height, const crypto::hash &s
 
   for (const auto& notifier : m_miner_notifiers)
   {
-    notifier(major_version, height, prev_id, seed_hash, diff, median_weight, already_generated_coins, tx_backlog);
+    notifier(major_version, height, prev_id, seed_hash, diff, median_weight, already_generated_coins, min_timestamp, tx_backlog);
   }
 }
 

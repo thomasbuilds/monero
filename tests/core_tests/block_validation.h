@@ -354,3 +354,21 @@ STRICT_TIMESTAMPS_TEMPLATE_TEST(gen_block_ts_template_first_strict, 70);
 STRICT_TIMESTAMPS_TEMPLATE_TEST(gen_block_ts_template_first_strict_median, 70);
 STRICT_TIMESTAMPS_TEMPLATE_TEST(gen_block_ts_template_alt_before_strict, 1000);
 STRICT_TIMESTAMPS_TEMPLATE_TEST(gen_block_ts_template_tip, 1000);
+
+template<uint64_t height, bool median_chain>
+struct gen_block_ts_miner_data_base : public test_chain_unit_base
+{
+  static constexpr uint64_t strict_height = height;
+  gen_block_ts_miner_data_base();
+  bool generate(std::vector<test_event_entry>& events) const;
+  bool check_miner_data(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
+};
+
+struct gen_block_ts_miner_data_before_strict : public gen_block_ts_miner_data_base<100, true> {};
+template<> struct get_test_options<gen_block_ts_miner_data_before_strict>: public get_strict_timestamps_test_options<gen_block_ts_miner_data_before_strict::strict_height> {};
+
+struct gen_block_ts_miner_data_first_strict : public gen_block_ts_miner_data_base<70, true> {};
+template<> struct get_test_options<gen_block_ts_miner_data_first_strict>: public get_strict_timestamps_test_options<gen_block_ts_miner_data_first_strict::strict_height> {};
+
+struct gen_block_ts_miner_data_strict : public gen_block_ts_miner_data_base<2, false> {};
+template<> struct get_test_options<gen_block_ts_miner_data_strict>: public get_strict_timestamps_test_options<gen_block_ts_miner_data_strict::strict_height> {};
