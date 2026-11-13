@@ -877,10 +877,37 @@ bool Blockchain::get_block_by_hash(const crypto::hash &h, block &blk, bool *orph
   return false;
 }
 //------------------------------------------------------------------
+uint64_t Blockchain::get_difficulty_asert_anchor_height() const
+{
+  // the genesis block is stamped 0, so the anchor's parent must not be it
+  return std::max<uint64_t>(get_earliest_ideal_height_for_version(HF_VERSION_DIFFICULTY_ASERT) - 1, 2);
+}
+//------------------------------------------------------------------
+difficulty_type Blockchain::get_difficulty_asert(uint64_t height, const std::list<block_extended_info>& alt_chain, const boost::optional<difficulty_type>& anchor_difficulty) const
+{
+  CRITICAL_REGION_LOCAL(m_blockchain_lock);
+  const uint64_t alt_height = alt_chain.empty() ? height : alt_chain.front().height;
+  const auto alt_block = [&](uint64_t h) -> const block_extended_info& { return *std::next(alt_chain.begin(), h - alt_height); };
+  const auto timestamp = [&](uint64_t h) { return h < alt_height ? m_db->get_block_timestamp(h) : alt_block(h).bl.timestamp; };
+  const auto cumulative_difficulty = [&](uint64_t h) { return h < alt_height ? m_db->get_block_cumulative_difficulty(h) : alt_block(h).cumulative_difficulty; };
+
+  const uint64_t anchor_height = get_difficulty_asert_anchor_height();
+  if (height <= anchor_height)
+    return 1;
+
+  const difficulty_type anchor = anchor_difficulty ? *anchor_difficulty : cumulative_difficulty(anchor_height) - cumulative_difficulty(anchor_height - 1);
+  if (height <= anchor_height + DIFFICULTY_ASERT_LAG)
+    return anchor;
+
+  const uint64_t newest = height - 1 - DIFFICULTY_ASERT_LAG;
+  return next_difficulty_asert(anchor, timestamp(anchor_height - 1), timestamp(newest), newest - anchor_height + 1, DIFFICULTY_TARGET_V2, DIFFICULTY_ASERT_HALF_LIFE);
+}
+//------------------------------------------------------------------
 // This function aggregates the cumulative difficulties and timestamps of the
 // last DIFFICULTY_BLOCKS_COUNT blocks and passes them to next_difficulty,
 // returning the result of that call.  Ignores the genesis block, and can use
-// less blocks than desired if there aren't enough.
+// less blocks than desired if there aren't enough.  From
+// HF_VERSION_DIFFICULTY_ASERT on it returns the result of get_difficulty_asert.
 difficulty_type Blockchain::get_difficulty_for_next_block()
 {
   if (m_fixed_difficulty)
@@ -907,6 +934,14 @@ difficulty_type Blockchain::get_difficulty_for_next_block()
   uint64_t height;
   top_hash = get_tail_id(height); // get it again now that we have the lock
   ++height; // top block height to blockchain height
+  if (get_ideal_hard_fork_version(height) >= HF_VERSION_DIFFICULTY_ASERT)
+  {
+    const difficulty_type diff = get_difficulty_asert(height);
+    CRITICAL_REGION_LOCAL1(m_difficulty_lock);
+    m_difficulty_for_next_block_top_hash = top_hash;
+    m_difficulty_for_next_block = diff;
+    return diff;
+  }
   // ND: Speedup
   // 1. Keep a list of the last 735 (or less) blocks that is used to compute difficulty,
   //    then when the next block difficulty is queried, push the latest height data and
@@ -1004,12 +1039,19 @@ size_t Blockchain::recalculate_difficulties(boost::optional<uint64_t> start_heig
     }
   }
   difficulty_type last_cum_diff = start_height <= 1 ? start_height : difficulties.back();
+  const uint64_t asert_anchor_height = get_difficulty_asert_anchor_height();
+  boost::optional<difficulty_type> asert_anchor_difficulty;
   uint64_t drift_start_height = 0;
   std::vector<difficulty_type> new_cumulative_difficulties;
   for (uint64_t height = start_height; height <= top_height; ++height)
   {
-    size_t target = get_ideal_hard_fork_version(height) < 2 ? DIFFICULTY_TARGET_V1 : DIFFICULTY_TARGET_V2;
-    difficulty_type recalculated_diff = next_difficulty(timestamps, difficulties, target);
+    const uint8_t hf_version = get_ideal_hard_fork_version(height);
+    size_t target = hf_version < 2 ? DIFFICULTY_TARGET_V1 : DIFFICULTY_TARGET_V2;
+    difficulty_type recalculated_diff = hf_version >= HF_VERSION_DIFFICULTY_ASERT
+      ? get_difficulty_asert(height, {}, asert_anchor_difficulty)
+      : next_difficulty(timestamps, difficulties, target);
+    if (height == asert_anchor_height)
+      asert_anchor_difficulty = recalculated_diff;
 
     boost::multiprecision::uint256_t recalculated_cum_diff_256 = boost::multiprecision::uint256_t(recalculated_diff) + last_cum_diff;
     CHECK_AND_ASSERT_THROW_MES(recalculated_cum_diff_256 <= std::numeric_limits<difficulty_type>::max(), "Difficulty overflow!");
@@ -1257,6 +1299,9 @@ difficulty_type Blockchain::get_next_difficulty_for_alternative_chain(const std:
   }
 
   LOG_PRINT_L3("Blockchain::" << __func__);
+  if (get_ideal_hard_fork_version(bei.height) >= HF_VERSION_DIFFICULTY_ASERT)
+    return get_difficulty_asert(bei.height, alt_chain);
+
   std::vector<uint64_t> timestamps;
   std::vector<difficulty_type> cumulative_difficulties;
 

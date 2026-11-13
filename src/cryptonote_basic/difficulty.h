@@ -59,5 +59,19 @@ namespace cryptonote
     bool check_hash(const crypto::hash &hash, difficulty_type difficulty);
     difficulty_type next_difficulty(std::vector<std::uint64_t> timestamps, std::vector<difficulty_type> cumulative_difficulties, size_t target_seconds);
 
+    /**
+     * @brief difficulty by ASERT (Bitcoin Cash's aserti3-2d, applied to the difficulty)
+     *
+     * @param anchor_difficulty difficulty of the anchor block
+     * @param anchor_time timestamp of the anchor block's parent
+     * @param time timestamp of the newest block taken into account
+     * @param blocks number of blocks from the anchor to that block, both included
+     * @param target_seconds target block time
+     * @param half_life time ahead of or behind schedule that doubles or halves the difficulty
+     *
+     * @return anchor_difficulty * 2^((target_seconds * blocks - (time - anchor_time)) / half_life) within [1, 2^128 - 1]
+     */
+    difficulty_type next_difficulty_asert(const difficulty_type &anchor_difficulty, uint64_t anchor_time, uint64_t time, uint64_t blocks, uint64_t target_seconds, uint64_t half_life);
+
     std::string hex(difficulty_type v);
 }

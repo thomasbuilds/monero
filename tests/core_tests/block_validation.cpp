@@ -1354,3 +1354,311 @@ bool gen_block_ts_miner_data_base<height, median_chain>::check_miner_data(crypto
 template struct gen_block_ts_miner_data_base<100, true>;
 template struct gen_block_ts_miner_data_base<70, true>;
 template struct gen_block_ts_miner_data_base<2, false>;
+
+namespace
+{
+  static_assert(HF_VERSION_STRICT_TIMESTAMPS == HF_VERSION_DIFFICULTY_ASERT, "the test chains switch both rules at one height");
+
+  difficulty_type expected_difficulty(const std::vector<uint64_t>& timestamps, const std::vector<difficulty_type>& cumulative_difficulties, size_t asert_height)
+  {
+    const size_t height = timestamps.size();
+    if (height < asert_height)
+      return next_difficulty(std::vector<uint64_t>(timestamps.begin() + 1, timestamps.end()),
+        std::vector<difficulty_type>(cumulative_difficulties.begin() + 1, cumulative_difficulties.end()), DIFFICULTY_TARGET_V2);
+    const size_t anchor = std::max<size_t>(asert_height - 1, 2);
+    if (height <= anchor)
+      return 1;
+    const difficulty_type anchor_difficulty = cumulative_difficulties[anchor] - cumulative_difficulties[anchor - 1];
+    if (height <= anchor + DIFFICULTY_ASERT_LAG)
+      return anchor_difficulty;
+    const size_t newest = height - 1 - DIFFICULTY_ASERT_LAG;
+    return next_difficulty_asert(anchor_difficulty, timestamps[anchor - 1], timestamps[newest], newest - anchor + 1, DIFFICULTY_TARGET_V2, DIFFICULTY_ASERT_HALF_LIFE);
+  }
+
+  struct difficulty_test_chain
+  {
+    size_t asert_height;
+    std::vector<block> blocks;
+    std::vector<uint64_t> timestamps;
+    std::vector<difficulty_type> cumulative_difficulties;
+
+    explicit difficulty_test_chain(const block& genesis, size_t asert_height = difficulty_asert_test_height):
+      asert_height(asert_height), blocks{genesis}, timestamps{genesis.timestamp}, cumulative_difficulties{1} {}
+
+    size_t height() const { return blocks.size(); }
+    difficulty_type next() const { return expected_difficulty(timestamps, cumulative_difficulties, asert_height); }
+    difficulty_type difficulty(size_t h) const { return cumulative_difficulties[h] - cumulative_difficulties[h - 1]; }
+
+    void append(const block& blk)
+    {
+      cumulative_difficulties.push_back(cumulative_difficulties.back() + next());
+      timestamps.push_back(blk.timestamp);
+      blocks.push_back(blk);
+    }
+
+    bool mine(std::vector<test_event_entry>& events, test_generator& generator, const account_base& miner_account, int64_t step)
+    {
+      block blk;
+      if (!make_strict_ts_test_block(generator, blk, blocks.back(), miner_account, asert_height, blocks.back().timestamp + step, next()))
+        return false;
+      events.push_back(blk);
+      append(blk);
+      return true;
+    }
+
+    void cut(size_t new_height)
+    {
+      blocks.resize(new_height);
+      timestamps.resize(new_height);
+      cumulative_difficulties.resize(new_height);
+    }
+  };
+
+  bool get_template_difficulty(cryptonote::core& c, const crypto::hash *parent, difficulty_type& diffic)
+  {
+    block b;
+    return get_test_block_template(c, parent, b, diffic);
+  }
+
+  // Compares the stored main chain with expected_difficulty and with the template on every one of its blocks.
+  bool check_main_chain_difficulties(cryptonote::core& c, difficulty_test_chain& chain)
+  {
+    DEFINE_TESTS_ERROR_CONTEXT("check_main_chain_difficulties");
+
+    Blockchain& bc = c.get_blockchain_storage();
+    const uint64_t height = c.get_current_blockchain_height();
+    block blk;
+    CHECK_TEST_CONDITION(bc.get_block_by_hash(c.get_block_id_by_height(0), blk));
+    chain = difficulty_test_chain(blk, chain.asert_height);
+    for (uint64_t i = 1; i <= height; ++i)
+    {
+      const crypto::hash parent = c.get_block_id_by_height(i - 1);
+      difficulty_type diffic;
+      CHECK_TEST_CONDITION(get_template_difficulty(c, &parent, diffic));
+      CHECK_EQ(diffic, chain.next());
+      if (i == height)
+        break;
+      CHECK_TEST_CONDITION(bc.get_block_by_hash(c.get_block_id_by_height(i), blk));
+      chain.append(blk);
+      CHECK_EQ(bc.get_db().get_block_cumulative_difficulty(i), chain.cumulative_difficulties.back());
+    }
+    difficulty_type diffic;
+    CHECK_TEST_CONDITION(get_template_difficulty(c, nullptr, diffic));
+    CHECK_EQ(diffic, chain.next());
+    return true;
+  }
+
+  // Difficulties of the test chains below, from tests/difficulty/gen_asert_vectors.py core: every block from a given
+  // height on, then the next block's.
+  const std::vector<uint64_t> asert_model_main_1 = {1, 1, 1, 1, 1, 1, 2, 2, 3, 3, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 8, 13, 6, 5, 6, 5, 2, 2, 2, 2, 2, 2, 2};
+  const std::vector<uint64_t> asert_model_alt_1 = {6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 8, 13, 6, 5, 6, 5, 2, 1, 1, 1};
+  const std::vector<uint64_t> asert_model_main_2 = {1, 1, 1, 1, 1, 1, 2, 2, 3, 3, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 5, 6, 5};
+  const std::vector<uint64_t> asert_model_alt_2 = {4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 4, 21, 21, 21, 21, 21};
+  const std::vector<uint64_t> asert_model_early = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 4, 4, 5, 5, 5, 5, 5};
+
+  bool check_model_difficulties(const difficulty_test_chain& chain, size_t first_height, const std::vector<uint64_t>& model)
+  {
+    DEFINE_TESTS_ERROR_CONTEXT("check_model_difficulties");
+
+    CHECK_EQ(chain.height(), first_height + model.size() - 1);
+    for (size_t i = 0; i + 1 < model.size(); ++i)
+      CHECK_EQ(chain.difficulty(first_height + i), model[i]);
+    CHECK_EQ(chain.next(), model.back());
+    return true;
+  }
+}
+
+gen_block_difficulty_asert::gen_block_difficulty_asert()
+{
+  REGISTER_CALLBACK_METHOD(gen_block_difficulty_asert, check_difficulties);
+}
+
+bool gen_block_difficulty_asert::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+  generator.set_events(&events);
+
+  // The anchor is stamped below its parent and the first block of the new rule below the anchor. The next two
+  // blocks are exactly on schedule and one second behind it, then come an hour, a half-life and fast blocks.
+  difficulty_test_chain chain(blk_0);
+  std::vector<int64_t> steps{120, 120, 120, 120, 120, 1, 1, 1, 1, 1, 1, 1, -20000,
+                             -30000, 50000 + 3 * DIFFICULTY_TARGET_V2, DIFFICULTY_TARGET_V2 + 1, 1, 3600, DIFFICULTY_ASERT_HALF_LIFE};
+  steps.resize(55, 1);
+  for (const int64_t step: steps)
+    CHECK_AND_ASSERT_MES(chain.mine(events, generator, miner_account, step), false, "Failed to make block");
+
+  // an alternative chain long enough to have its own timestamps taken into account
+  difficulty_test_chain alt = chain;
+  alt.cut(20);
+  for (size_t i = 0; i < DIFFICULTY_ASERT_LAG + 3; ++i)
+    CHECK_AND_ASSERT_MES(alt.mine(events, generator, miner_account, i ? 1 : DIFFICULTY_ASERT_HALF_LIFE), false, "Failed to make block");
+  CHECK_AND_ASSERT_MES(alt.cumulative_difficulties.back() < chain.cumulative_difficulties.back(), false, "The alternative chain is not lighter");
+
+  DO_CALLBACK(events, "check_difficulties");
+
+  return true;
+}
+
+bool gen_block_difficulty_asert::check_difficulties(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events)
+{
+  DEFINE_TESTS_ERROR_CONTEXT("gen_block_difficulty_asert::check_difficulties");
+
+  Blockchain& bc = c.get_blockchain_storage();
+  const uint64_t height = c.get_current_blockchain_height();
+  CHECK_EQ(height, 56);
+  CHECK_EQ(c.get_tail_id(), get_block_hash(boost::get<block>(events[55])));
+  CHECK_EQ(c.get_alternative_blocks_count(), ev_index - 56);
+
+  difficulty_test_chain chain(boost::get<block>(events[0]));
+  CHECK_TEST_CONDITION(check_main_chain_difficulties(c, chain));
+  CHECK_TEST_CONDITION(check_model_difficulties(chain, 1, asert_model_main_1));
+
+  difficulty_test_chain alt = chain;
+  alt.cut(20);
+  for (size_t i = 56; i < ev_index; ++i)
+  {
+    alt.append(boost::get<block>(events[i]));
+    const crypto::hash alt_id = get_block_hash(alt.blocks.back());
+    difficulty_type diffic;
+    CHECK_TEST_CONDITION(get_template_difficulty(c, &alt_id, diffic));
+    CHECK_EQ(diffic, alt.next());
+  }
+  CHECK_TEST_CONDITION(check_model_difficulties(alt, 20, asert_model_alt_1));
+
+  // a wrong anchor is recalculated before it is used; a recalculation that starts above the anchor reads it
+  CHECK_EQ(bc.recalculate_difficulties(1), 0);
+  for (const uint64_t wrong_from: {difficulty_asert_test_height - 1, difficulty_asert_test_height + DIFFICULTY_ASERT_LAG + 5})
+  {
+    std::vector<difficulty_type> wrong(chain.cumulative_difficulties.begin() + wrong_from, chain.cumulative_difficulties.end());
+    for (difficulty_type &d: wrong)
+      ++d;
+    bc.get_db().correct_block_cumulative_difficulties(wrong_from, wrong);
+    CHECK_EQ(bc.recalculate_difficulties(wrong_from < difficulty_asert_test_height ? 1 : wrong_from - 3), height - wrong_from);
+    for (uint64_t i = 0; i < height; ++i)
+      CHECK_EQ(bc.get_db().get_block_cumulative_difficulty(i), chain.cumulative_difficulties[i]);
+  }
+
+  return true;
+}
+
+gen_block_difficulty_asert_reorg::gen_block_difficulty_asert_reorg()
+{
+  REGISTER_CALLBACK_METHOD(gen_block_difficulty_asert_reorg, check_before_reorg);
+  REGISTER_CALLBACK_METHOD(gen_block_difficulty_asert_reorg, check_after_reorg);
+}
+
+bool gen_block_difficulty_asert_reorg::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+  generator.set_events(&events);
+
+  difficulty_test_chain chain(blk_0);
+  std::vector<int64_t> steps{120, 120, 120, 120, 120, 1, 1, 1, 1, 1, 1, 1, DIFFICULTY_TARGET_V2 + 1, 1, 5000, 5000};
+  steps.resize(45, 1);
+  for (const int64_t step: steps)
+    CHECK_AND_ASSERT_MES(chain.mine(events, generator, miner_account, step), false, "Failed to make block");
+
+  DO_CALLBACK(events, "check_before_reorg");
+
+  // Forks three blocks below the anchor and gets its own anchor, of a lower difficulty than the main chain's. Its
+  // first block of the new rule is stamped far below the anchor, which puts it ahead of schedule once the lag has
+  // passed.
+  difficulty_test_chain alt = chain;
+  alt.cut(difficulty_asert_test_height - 3);
+  const std::vector<int64_t> alt_steps{200, 1, DIFFICULTY_TARGET_V2 + 1, -90000};
+  for (size_t i = 0, heavier = 0; heavier < 3; ++i)
+  {
+    CHECK_AND_ASSERT_MES(alt.mine(events, generator, miner_account, i < alt_steps.size() ? alt_steps[i] : 1), false, "Failed to make block");
+    heavier += alt.cumulative_difficulties.back() > chain.cumulative_difficulties.back();
+  }
+  CHECK_AND_ASSERT_MES(alt.difficulty(difficulty_asert_test_height - 1) != chain.difficulty(difficulty_asert_test_height - 1), false, "The anchors do not differ");
+
+  DO_CALLBACK(events, "check_after_reorg");
+
+  return true;
+}
+
+bool gen_block_difficulty_asert_reorg::check_before_reorg(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events)
+{
+  DEFINE_TESTS_ERROR_CONTEXT("gen_block_difficulty_asert_reorg::check_before_reorg");
+
+  CHECK_EQ(ev_index, 46);
+  CHECK_EQ(c.get_current_blockchain_height(), 46);
+  CHECK_EQ(c.get_tail_id(), get_block_hash(boost::get<block>(events[45])));
+  CHECK_EQ(c.get_alternative_blocks_count(), 0);
+
+  difficulty_test_chain chain(boost::get<block>(events[0]));
+  CHECK_TEST_CONDITION(check_main_chain_difficulties(c, chain));
+  CHECK_TEST_CONDITION(check_model_difficulties(chain, 1, asert_model_main_2));
+
+  return true;
+}
+
+bool gen_block_difficulty_asert_reorg::check_after_reorg(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events)
+{
+  DEFINE_TESTS_ERROR_CONTEXT("gen_block_difficulty_asert_reorg::check_after_reorg");
+
+  const uint64_t fork_height = difficulty_asert_test_height - 3;
+  CHECK_EQ(c.get_current_blockchain_height(), fork_height + ev_index - 47);
+  CHECK_EQ(c.get_tail_id(), get_block_hash(boost::get<block>(events[ev_index - 1])));
+  CHECK_EQ(c.get_alternative_blocks_count(), 46 - fork_height);
+
+  difficulty_test_chain chain(boost::get<block>(events[0]));
+  CHECK_TEST_CONDITION(check_main_chain_difficulties(c, chain));
+  CHECK_TEST_CONDITION(check_model_difficulties(chain, fork_height, asert_model_alt_2));
+
+  // the replaced chain is now an alternative chain with its own anchor
+  difficulty_test_chain old_chain(boost::get<block>(events[0]));
+  for (size_t i = 1; i <= 45; ++i)
+  {
+    old_chain.append(boost::get<block>(events[i]));
+    if (i < fork_height)
+      continue;
+    const crypto::hash id = get_block_hash(old_chain.blocks.back());
+    difficulty_type diffic;
+    CHECK_TEST_CONDITION(get_template_difficulty(c, &id, diffic));
+    CHECK_EQ(diffic, old_chain.next());
+  }
+
+  CHECK_EQ(c.get_blockchain_storage().recalculate_difficulties(1), 0);
+
+  return true;
+}
+
+gen_block_difficulty_asert_early::gen_block_difficulty_asert_early()
+{
+  REGISTER_CALLBACK_METHOD(gen_block_difficulty_asert_early, check_difficulties);
+}
+
+bool gen_block_difficulty_asert_early::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+  generator.set_events(&events);
+
+  // The new rule starts at height 2, so the anchor is block 2 and not block 1, whose parent is the genesis block.
+  // Block 1 is stamped far above the blocks that follow, which puts them ahead of schedule.
+  difficulty_test_chain chain(blk_0, asert_height);
+  std::vector<int64_t> steps{100000, -99999};
+  steps.resize(DIFFICULTY_ASERT_LAG + 8, 1);
+  for (const int64_t step: steps)
+    CHECK_AND_ASSERT_MES(chain.mine(events, generator, miner_account, step), false, "Failed to make block");
+
+  DO_CALLBACK(events, "check_difficulties");
+
+  return true;
+}
+
+bool gen_block_difficulty_asert_early::check_difficulties(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events)
+{
+  DEFINE_TESTS_ERROR_CONTEXT("gen_block_difficulty_asert_early::check_difficulties");
+
+  CHECK_EQ(c.get_current_blockchain_height(), ev_index);
+
+  difficulty_test_chain chain(boost::get<block>(events[0]), asert_height);
+  CHECK_TEST_CONDITION(check_main_chain_difficulties(c, chain));
+  CHECK_TEST_CONDITION(check_model_difficulties(chain, 1, asert_model_early));
+
+  CHECK_EQ(c.get_blockchain_storage().recalculate_difficulties(1), 0);
+
+  return true;
+}

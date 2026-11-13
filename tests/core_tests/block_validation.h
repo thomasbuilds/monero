@@ -372,3 +372,31 @@ template<> struct get_test_options<gen_block_ts_miner_data_first_strict>: public
 
 struct gen_block_ts_miner_data_strict : public gen_block_ts_miner_data_base<2, false> {};
 template<> struct get_test_options<gen_block_ts_miner_data_strict>: public get_strict_timestamps_test_options<gen_block_ts_miner_data_strict::strict_height> {};
+
+const uint64_t difficulty_asert_test_height = 14;
+
+struct gen_block_difficulty_asert : public test_chain_unit_base
+{
+  gen_block_difficulty_asert();
+  bool generate(std::vector<test_event_entry>& events) const;
+  bool check_difficulties(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
+};
+template<> struct get_test_options<gen_block_difficulty_asert>: public get_strict_timestamps_test_options<difficulty_asert_test_height> {};
+
+struct gen_block_difficulty_asert_reorg : public test_chain_unit_base
+{
+  gen_block_difficulty_asert_reorg();
+  bool generate(std::vector<test_event_entry>& events) const;
+  bool check_before_reorg(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
+  bool check_after_reorg(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
+};
+template<> struct get_test_options<gen_block_difficulty_asert_reorg>: public get_strict_timestamps_test_options<difficulty_asert_test_height> {};
+
+struct gen_block_difficulty_asert_early : public test_chain_unit_base
+{
+  static constexpr uint64_t asert_height = 2;
+  gen_block_difficulty_asert_early();
+  bool generate(std::vector<test_event_entry>& events) const;
+  bool check_difficulties(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
+};
+template<> struct get_test_options<gen_block_difficulty_asert_early>: public get_strict_timestamps_test_options<gen_block_difficulty_asert_early::asert_height> {};

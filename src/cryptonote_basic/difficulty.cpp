@@ -241,6 +241,35 @@ namespace cryptonote {
     return res.convert_to<difficulty_type>();
   }
 
+  difficulty_type next_difficulty_asert(const difficulty_type &anchor_difficulty, uint64_t anchor_time, uint64_t time, uint64_t blocks, uint64_t target_seconds, uint64_t half_life) {
+    using boost::multiprecision::uint256_t;
+    const uint256_t ahead = uint256_t(target_seconds) * blocks + anchor_time;
+    const bool negative = ahead < time;
+    const uint256_t magnitude = negative ? time - ahead : ahead - time;
+    if (magnitude >= uint256_t(half_life) * 128)
+      return negative ? difficulty_type(1) : max128bit.convert_to<difficulty_type>();
+    const uint64_t exponent = (magnitude * 65536 / half_life).convert_to<uint64_t>();
+    int shifts = static_cast<int>(exponent >> 16);
+    uint64_t frac = exponent & 0xffff;
+    if (negative) {
+      shifts = frac ? -shifts - 1 : -shifts;
+      frac = frac ? 65536 - frac : 0;
+    }
+    // 2^(frac / 65536) * 65536 by the cubic approximation of Bitcoin Cash's aserti3-2d
+    const uint64_t factor = 65536 + ((195766423245049ull * frac + 971821376ull * frac * frac + 5127ull * frac * frac * frac + (1ull << 47)) >> 48);
+    uint256_t res = uint256_t(anchor_difficulty) * factor;
+    shifts -= 16;
+    if (shifts >= 0)
+      res <<= shifts;
+    else
+      res >>= -shifts;
+    if (res == 0)
+      return 1;
+    if (res > max128bit)
+      return max128bit.convert_to<difficulty_type>();
+    return res.convert_to<difficulty_type>();
+  }
+
   std::string hex(difficulty_type v)
   {
     static const char chars[] = "0123456789abcdef";

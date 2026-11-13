@@ -1451,6 +1451,27 @@ namespace cryptonote
     difficulty_type get_next_difficulty_for_alternative_chain(const std::list<block_extended_info>& alt_chain, block_extended_info& bei) const;
 
     /**
+     * @brief gets the height of the anchor block of the difficulty from HF_VERSION_DIFFICULTY_ASERT on
+     *
+     * @return the height of the last block before that version, 2 at the least
+     */
+    uint64_t get_difficulty_asert_anchor_height() const;
+
+    /**
+     * @brief gets the difficulty requirement for a block from HF_VERSION_DIFFICULTY_ASERT on
+     *
+     * Blocks up to the anchor have difficulty 1. Blocks are read from alt_chain
+     * where it has their height and from the main chain below it.
+     *
+     * @param height the block's height
+     * @param alt_chain the alternative chain the block extends, empty for the main chain
+     * @param anchor_difficulty the anchor's difficulty if it is not to be read from its chain
+     *
+     * @return the difficulty requirement
+     */
+    difficulty_type get_difficulty_asert(uint64_t height, const std::list<block_extended_info>& alt_chain = {}, const boost::optional<difficulty_type>& anchor_difficulty = boost::none) const;
+
+    /**
      * @brief sanity checks a miner transaction before validating an entire block
      *
      * This function merely checks basic things like the structure of the miner
