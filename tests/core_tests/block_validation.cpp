@@ -795,3 +795,505 @@ bool gen_block_miner_tx_out_has_view_tag_from_hf_view_tags::generate(std::vector
 
   return true;
 }
+
+namespace
+{
+  const uint64_t first_strict_ts_slack = CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT - CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT_V17;
+
+  bool make_strict_ts_test_block(test_generator& generator, block& blk, const block& prev, const account_base& miner_account,
+                                 uint64_t strict_height, uint64_t timestamp, const difficulty_type& diffic = 1)
+  {
+    const uint8_t version = get_block_height(prev) + 1 >= strict_height ? HF_VERSION_STRICT_TIMESTAMPS : HF_VERSION_STRICT_TIMESTAMPS - 1;
+    return generator.construct_block_manually(blk, prev, miner_account,
+      test_generator::bf_major_ver | test_generator::bf_minor_ver | test_generator::bf_timestamp | test_generator::bf_diffic | test_generator::bf_hf_version,
+      version, version, timestamp, crypto::hash(), diffic, transaction(), std::vector<crypto::hash>(), 0, 0, version);
+  }
+
+  // n blocks on top of blk_last, `step` seconds apart, the last one stamped `last`
+  bool make_strict_ts_test_chain(std::vector<test_event_entry>& events, test_generator& generator, block& blk_last, const account_base& miner_account,
+                                 uint64_t strict_height, size_t n, uint64_t last, uint64_t step)
+  {
+    for (size_t i = 1; i <= n; ++i)
+    {
+      block blk;
+      if (!make_strict_ts_test_block(generator, blk, blk_last, miner_account, strict_height, last - step * (n - i)))
+        return false;
+      events.push_back(blk);
+      blk_last = blk;
+    }
+    return true;
+  }
+
+  // median of the timestamps of the BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW blocks before events[end]
+  uint64_t median_timestamp(const std::vector<test_event_entry>& events, size_t end)
+  {
+    std::vector<uint64_t> timestamps;
+    for (size_t i = end - BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW; i < end; ++i)
+      timestamps.push_back(boost::get<block>(events[i]).timestamp);
+    return epee::misc_utils::median(timestamps);
+  }
+
+  // 10 blocks, or 69 blocks the last of which is stamped below the median of the last BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW
+  bool make_strict_ts_base_chain(std::vector<test_event_entry>& events, test_generator& generator, block& blk_last, const account_base& miner_account,
+                                 uint64_t strict_height, bool median_chain)
+  {
+    const size_t n = median_chain ? 68 : 10;
+    if (!make_strict_ts_test_chain(events, generator, blk_last, miner_account, strict_height, n, blk_last.timestamp + 2 * DIFFICULTY_TARGET_V2 * n, 2 * DIFFICULTY_TARGET_V2))
+      return false;
+    if (!median_chain)
+      return true;
+    if (!make_strict_ts_test_chain(events, generator, blk_last, miner_account, strict_height, 1, median_timestamp(events, events.size()), 0))
+      return false;
+    return median_timestamp(events, events.size()) > blk_last.timestamp;
+  }
+
+  // timestamp of the block under test, from its parent and the median of the last BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW
+  typedef uint64_t strict_ts_choice(const block& parent, uint64_t median);
+  uint64_t ts_equal_prev(const block& parent, uint64_t) { return parent.timestamp; }
+  uint64_t ts_future(const block&, uint64_t) { return time(NULL) + 2 * CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT_V17; }
+  uint64_t ts_median(const block&, uint64_t median) { return median; }
+  uint64_t ts_first_strict_min(const block&, uint64_t median) { return median - first_strict_ts_slack; }
+  uint64_t ts_below_first_strict_min(const block&, uint64_t median) { return median - first_strict_ts_slack - 1; }
+
+#define STRICT_TS_INIT_GENERATE() \
+  GENERATE_ACCOUNT(miner_account); \
+  MAKE_GENESIS_BLOCK(events, blk_0, miner_account, 1338224400); \
+  block blk_last = blk_0;
+
+  // the chain and a block on top of it
+  bool make_strict_ts_block_events(std::vector<test_event_entry>& events, uint64_t strict_height, bool median_chain, strict_ts_choice *timestamp, const char *callback)
+  {
+    STRICT_TS_INIT_GENERATE();
+
+    block blk;
+    CHECK_AND_ASSERT_MES(make_strict_ts_base_chain(events, generator, blk_last, miner_account, strict_height, median_chain), false, "Failed to make chain");
+    const uint64_t median = median_chain ? median_timestamp(events, events.size()) : 0;
+    CHECK_AND_ASSERT_MES(make_strict_ts_test_block(generator, blk, blk_last, miner_account, strict_height, timestamp(blk_last, median)), false, "Failed to make block");
+    events.push_back(blk);
+
+    DO_CALLBACK(events, callback);
+
+    return true;
+  }
+
+  // the chain, a block that extends it and an alternative block on the same parent
+  bool make_strict_ts_alt_events(std::vector<test_event_entry>& events, uint64_t strict_height, bool median_chain, strict_ts_choice *timestamp)
+  {
+    STRICT_TS_INIT_GENERATE();
+
+    block blk_alt;
+    CHECK_AND_ASSERT_MES(make_strict_ts_base_chain(events, generator, blk_last, miner_account, strict_height, median_chain), false, "Failed to make chain");
+    const uint64_t median = median_chain ? median_timestamp(events, events.size()) : 0;
+    CHECK_AND_ASSERT_MES(make_strict_ts_test_block(generator, blk_alt, blk_last, miner_account, strict_height, timestamp(blk_last, median)), false, "Failed to make block");
+    CHECK_AND_ASSERT_MES(make_strict_ts_test_chain(events, generator, blk_last, miner_account, strict_height, 1, blk_last.timestamp + 2 * DIFFICULTY_TARGET_V2, 0), false, "Failed to make block");
+    events.push_back(blk_alt);
+
+    DO_CALLBACK(events, "check_alt");
+
+    return true;
+  }
+
+  bool get_test_block_template(cryptonote::core& c, const crypto::hash *parent, block& b, difficulty_type& diffic)
+  {
+    account_base acc;
+    acc.generate();
+    uint64_t height, expected_reward, cumulative_weight, seed_height;
+    crypto::hash seed_hash;
+    return parent
+      ? c.get_block_template(b, parent, acc.get_keys().m_account_address, diffic, height, expected_reward, cumulative_weight, blobdata(), seed_height, seed_hash)
+      : c.get_block_template(b, acc.get_keys().m_account_address, diffic, height, expected_reward, cumulative_weight, blobdata(), seed_height, seed_hash);
+  }
+
+  // hands the block to the node as found by its own miner, with another timestamp if one is given
+  block_verification_context handle_test_block(cryptonote::core& c, block b, uint64_t timestamp = 0)
+  {
+    if (timestamp)
+    {
+      b.timestamp = timestamp;
+      b.invalidate_hashes();
+    }
+    block_verification_context bvc{};
+    c.handle_block_found(b, bvc);
+    return bvc;
+  }
+
+  bool added_to_main_chain(const block_verification_context& bvc) { return bvc.m_added_to_main_chain && !bvc.m_verifivation_failed; }
+  bool added_as_alternative(const block_verification_context& bvc) { return !bvc.m_added_to_main_chain && !bvc.m_verifivation_failed; }
+}
+
+bool gen_block_ts_equal_prev_before_strict::generate(std::vector<test_event_entry>& events) const
+{
+  return make_strict_ts_block_events(events, strict_height, false, ts_equal_prev, "check_block_accepted");
+}
+
+bool gen_block_ts_equal_prev_strict::generate(std::vector<test_event_entry>& events) const
+{
+  return make_strict_ts_block_events(events, strict_height, false, ts_equal_prev, "check_block_purged");
+}
+
+bool gen_block_ts_equal_prev_first_strict::generate(std::vector<test_event_entry>& events) const
+{
+  return make_strict_ts_block_events(events, strict_height, false, ts_equal_prev, "check_block_accepted");
+}
+
+bool gen_block_ts_future_before_strict::generate(std::vector<test_event_entry>& events) const
+{
+  return make_strict_ts_block_events(events, strict_height, false, ts_future, "check_block_accepted");
+}
+
+bool gen_block_ts_future_strict::generate(std::vector<test_event_entry>& events) const
+{
+  return make_strict_ts_block_events(events, strict_height, false, ts_future, "check_block_purged");
+}
+
+bool gen_block_ts_future_first_strict::generate(std::vector<test_event_entry>& events) const
+{
+  return make_strict_ts_block_events(events, strict_height, false, ts_future, "check_block_purged");
+}
+
+bool gen_block_ts_equal_median_before_strict::generate(std::vector<test_event_entry>& events) const
+{
+  return make_strict_ts_block_events(events, strict_height, true, ts_median, "check_block_accepted");
+}
+
+bool gen_block_ts_min_first_strict::generate(std::vector<test_event_entry>& events) const
+{
+  return make_strict_ts_block_events(events, strict_height, true, ts_first_strict_min, "check_block_accepted");
+}
+
+bool gen_block_ts_below_min_first_strict::generate(std::vector<test_event_entry>& events) const
+{
+  return make_strict_ts_block_events(events, strict_height, true, ts_below_first_strict_min, "check_block_purged");
+}
+
+bool gen_block_ts_below_median_strict::generate(std::vector<test_event_entry>& events) const
+{
+  STRICT_TS_INIT_GENERATE();
+
+  CHECK_AND_ASSERT_MES(make_strict_ts_base_chain(events, generator, blk_last, miner_account, strict_height, true), false, "Failed to make chain");
+  CHECK_AND_ASSERT_MES(make_strict_ts_test_chain(events, generator, blk_last, miner_account, strict_height, 2, blk_last.timestamp + 2, 1), false, "Failed to make blocks");
+  CHECK_AND_ASSERT_MES(median_timestamp(events, events.size() - 1) > blk_last.timestamp, false, "Median not above the last timestamp");
+
+  DO_CALLBACK(events, "check_block_accepted");
+
+  return true;
+}
+
+bool gen_block_ts_alt_equal_prev_before_strict::generate(std::vector<test_event_entry>& events) const
+{
+  return make_strict_ts_alt_events(events, strict_height, false, ts_equal_prev);
+}
+
+bool gen_block_ts_alt_equal_prev_strict::generate(std::vector<test_event_entry>& events) const
+{
+  return make_strict_ts_alt_events(events, strict_height, false, ts_equal_prev);
+}
+
+bool gen_block_ts_alt_future_before_strict::generate(std::vector<test_event_entry>& events) const
+{
+  return make_strict_ts_alt_events(events, strict_height, false, ts_future);
+}
+
+bool gen_block_ts_alt_future_strict::generate(std::vector<test_event_entry>& events) const
+{
+  return make_strict_ts_alt_events(events, strict_height, false, ts_future);
+}
+
+bool gen_block_ts_alt_future_first_strict::generate(std::vector<test_event_entry>& events) const
+{
+  return make_strict_ts_alt_events(events, strict_height, false, ts_future);
+}
+
+bool gen_block_ts_alt_equal_median_before_strict::generate(std::vector<test_event_entry>& events) const
+{
+  return make_strict_ts_alt_events(events, strict_height, true, ts_median);
+}
+
+bool gen_block_ts_alt_min_first_strict::generate(std::vector<test_event_entry>& events) const
+{
+  return make_strict_ts_alt_events(events, strict_height, true, ts_first_strict_min);
+}
+
+bool gen_block_ts_alt_below_min_first_strict::generate(std::vector<test_event_entry>& events) const
+{
+  return make_strict_ts_alt_events(events, strict_height, true, ts_below_first_strict_min);
+}
+
+bool gen_block_ts_alt_below_median_strict::generate(std::vector<test_event_entry>& events) const
+{
+  STRICT_TS_INIT_GENERATE();
+
+  block blk_alt;
+  CHECK_AND_ASSERT_MES(make_strict_ts_base_chain(events, generator, blk_last, miner_account, strict_height, true), false, "Failed to make chain");
+  CHECK_AND_ASSERT_MES(make_strict_ts_test_chain(events, generator, blk_last, miner_account, strict_height, 1, blk_last.timestamp + 1, 0), false, "Failed to make block");
+  CHECK_AND_ASSERT_MES(median_timestamp(events, events.size()) > blk_last.timestamp + 1, false, "Median not above the next timestamp");
+  CHECK_AND_ASSERT_MES(make_strict_ts_test_block(generator, blk_alt, blk_last, miner_account, strict_height, blk_last.timestamp + 1), false, "Failed to make block");
+  CHECK_AND_ASSERT_MES(make_strict_ts_test_chain(events, generator, blk_last, miner_account, strict_height, 1, blk_last.timestamp + 2 * DIFFICULTY_TARGET_V2, 0), false, "Failed to make block");
+  events.push_back(blk_alt);
+
+  DO_CALLBACK(events, "check_alt");
+
+  return true;
+}
+
+gen_block_ts_alt_chain_equal_prev_strict::gen_block_ts_alt_chain_equal_prev_strict()
+{
+  REGISTER_CALLBACK_METHOD(gen_block_ts_alt_chain_equal_prev_strict, check_alt_chain);
+}
+
+bool gen_block_ts_alt_chain_equal_prev_strict::generate(std::vector<test_event_entry>& events) const
+{
+  STRICT_TS_INIT_GENERATE();
+
+  // two alternative blocks on block 10, then one with the timestamp of its alternative parent
+  CHECK_AND_ASSERT_MES(make_strict_ts_test_chain(events, generator, blk_last, miner_account, strict_height, 13, blk_last.timestamp + 13 * 2 * DIFFICULTY_TARGET_V2, 2 * DIFFICULTY_TARGET_V2), false, "Failed to make chain");
+  blk_last = boost::get<block>(events[10]);
+  CHECK_AND_ASSERT_MES(make_strict_ts_test_chain(events, generator, blk_last, miner_account, strict_height, 2, blk_last.timestamp + 2, 1), false, "Failed to make blocks");
+  CHECK_AND_ASSERT_MES(make_strict_ts_test_chain(events, generator, blk_last, miner_account, strict_height, 1, blk_last.timestamp, 0), false, "Failed to make block");
+
+  DO_CALLBACK(events, "check_alt_chain");
+
+  return true;
+}
+
+bool gen_block_ts_alt_chain_equal_prev_strict::check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*blk*/)
+{
+  if (event_idx == 16)
+    return bvc.m_verifivation_failed;
+  if (event_idx >= 14)
+    return added_as_alternative(bvc);
+  return !bvc.m_verifivation_failed;
+}
+
+bool gen_block_ts_alt_chain_equal_prev_strict::check_alt_chain(cryptonote::core& c, size_t /*ev_index*/, const std::vector<test_event_entry>& /*events*/)
+{
+  DEFINE_TESTS_ERROR_CONTEXT("gen_block_ts_alt_chain_equal_prev_strict::check_alt_chain");
+
+  CHECK_EQ(14, c.get_current_blockchain_height());
+  CHECK_EQ(2, c.get_alternative_blocks_count());
+
+  return true;
+}
+
+#define STRICT_TS_TEMPLATE_TEST_CONSTRUCTOR(name) \
+  name::name() \
+  { \
+    REGISTER_CALLBACK_METHOD(name, check_templates); \
+  }
+
+STRICT_TS_TEMPLATE_TEST_CONSTRUCTOR(gen_block_ts_template_strict)
+STRICT_TS_TEMPLATE_TEST_CONSTRUCTOR(gen_block_ts_template_below_strict)
+STRICT_TS_TEMPLATE_TEST_CONSTRUCTOR(gen_block_ts_template_first_strict)
+STRICT_TS_TEMPLATE_TEST_CONSTRUCTOR(gen_block_ts_template_first_strict_median)
+STRICT_TS_TEMPLATE_TEST_CONSTRUCTOR(gen_block_ts_template_alt_before_strict)
+STRICT_TS_TEMPLATE_TEST_CONSTRUCTOR(gen_block_ts_template_tip)
+
+bool gen_block_ts_template_strict::generate(std::vector<test_event_entry>& events) const
+{
+  STRICT_TS_INIT_GENERATE();
+
+  // the newest blocks one second apart and ahead of the clock
+  CHECK_AND_ASSERT_MES(make_strict_ts_base_chain(events, generator, blk_last, miner_account, strict_height, false), false, "Failed to make chain");
+  CHECK_AND_ASSERT_MES(make_strict_ts_test_chain(events, generator, blk_last, miner_account, strict_height, BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW,
+    time(NULL) + CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT_V17 / 2, 1), false, "Failed to make chain");
+
+  DO_CALLBACK(events, "check_templates");
+
+  return true;
+}
+
+bool gen_block_ts_template_strict::check_templates(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events)
+{
+  DEFINE_TESTS_ERROR_CONTEXT("gen_block_ts_template_strict::check_templates");
+
+  const uint64_t height = c.get_current_blockchain_height();
+  const block &tip = boost::get<block>(events[ev_index - 1]);
+  const block &tip_parent = boost::get<block>(events[ev_index - 2]);
+
+  block b;
+  difficulty_type diffic;
+  CHECK_TEST_CONDITION(get_test_block_template(c, nullptr, b, diffic));
+  CHECK_EQ(b.timestamp, tip.timestamp + 1);
+  CHECK_EQ(diffic, 1);
+  CHECK_TEST_CONDITION(handle_test_block(c, b, median_timestamp(events, ev_index)).m_verifivation_failed);
+  CHECK_TEST_CONDITION(handle_test_block(c, b, tip.timestamp).m_verifivation_failed);
+  CHECK_EQ(height, c.get_current_blockchain_height());
+  CHECK_TEST_CONDITION(added_to_main_chain(handle_test_block(c, b)));
+
+  const crypto::hash alt_parent = get_block_hash(tip_parent);
+  block alt;
+  CHECK_TEST_CONDITION(get_test_block_template(c, &alt_parent, alt, diffic));
+  CHECK_EQ(alt.timestamp, tip_parent.timestamp + 1);
+  CHECK_TEST_CONDITION(added_as_alternative(handle_test_block(c, alt)));
+
+  const crypto::hash alt_tip = get_block_hash(alt);
+  block alt_child;
+  CHECK_TEST_CONDITION(get_test_block_template(c, &alt_tip, alt_child, diffic));
+  CHECK_EQ(alt_child.timestamp, alt.timestamp + 1);
+  CHECK_TEST_CONDITION(added_as_alternative(handle_test_block(c, alt_child)));
+  CHECK_EQ(2, c.get_alternative_blocks_count());
+
+  return true;
+}
+
+bool gen_block_ts_template_below_strict::generate(std::vector<test_event_entry>& events) const
+{
+  STRICT_TS_INIT_GENERATE();
+
+  // the blocks below the strict height run ahead of the clock, and so does their median; two strict blocks at the clock follow
+  const uint64_t now = time(NULL);
+  CHECK_AND_ASSERT_MES(make_strict_ts_test_chain(events, generator, blk_last, miner_account, strict_height, strict_height - 1, now + 6800, DIFFICULTY_TARGET_V2 + 1), false, "Failed to make chain");
+  CHECK_AND_ASSERT_MES(make_strict_ts_test_chain(events, generator, blk_last, miner_account, strict_height, 2, now + 1, 1), false, "Failed to make chain");
+
+  DO_CALLBACK(events, "check_templates");
+
+  return true;
+}
+
+bool gen_block_ts_template_below_strict::check_templates(cryptonote::core& c, size_t /*ev_index*/, const std::vector<test_event_entry>& events)
+{
+  DEFINE_TESTS_ERROR_CONTEXT("gen_block_ts_template_below_strict::check_templates");
+
+  // a template on a block below the strict height follows the rule of that block's chain, not the main chain tip's
+  const size_t parent_height = strict_height - 4;
+  const crypto::hash parent = get_block_hash(boost::get<block>(events[parent_height]));
+  block b;
+  difficulty_type diffic;
+  CHECK_TEST_CONDITION(get_test_block_template(c, &parent, b, diffic));
+  CHECK_TEST_CONDITION(b.major_version < HF_VERSION_STRICT_TIMESTAMPS);
+  CHECK_TEST_CONDITION(b.timestamp > (uint64_t)time(NULL));
+  CHECK_EQ(b.timestamp, median_timestamp(events, parent_height + 1));
+  CHECK_TEST_CONDITION(added_as_alternative(handle_test_block(c, b)));
+  CHECK_EQ(1, c.get_alternative_blocks_count());
+
+  return true;
+}
+
+bool gen_block_ts_template_first_strict::generate(std::vector<test_event_entry>& events) const
+{
+  STRICT_TS_INIT_GENERATE();
+
+  // the last block below the strict height is stamped beyond the new future time limit
+  const uint64_t now = time(NULL);
+  CHECK_AND_ASSERT_MES(make_strict_ts_test_chain(events, generator, blk_last, miner_account, strict_height, strict_height - 2, now - 2 * DIFFICULTY_TARGET_V2, 2 * DIFFICULTY_TARGET_V2), false, "Failed to make chain");
+  CHECK_AND_ASSERT_MES(make_strict_ts_test_chain(events, generator, blk_last, miner_account, strict_height, 1, now + 2 * CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT_V17, 0), false, "Failed to make block");
+
+  DO_CALLBACK(events, "check_templates");
+
+  return true;
+}
+
+bool gen_block_ts_template_first_strict::check_templates(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events)
+{
+  DEFINE_TESTS_ERROR_CONTEXT("gen_block_ts_template_first_strict::check_templates");
+
+  const block &tip = boost::get<block>(events[ev_index - 1]);
+  CHECK_TEST_CONDITION(tip.timestamp > (uint64_t)time(NULL) + CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT_V17);
+
+  block first, second;
+  difficulty_type diffic;
+  CHECK_TEST_CONDITION(get_test_block_template(c, nullptr, first, diffic));
+  CHECK_EQ(first.major_version, HF_VERSION_STRICT_TIMESTAMPS);
+  CHECK_TEST_CONDITION(first.timestamp < tip.timestamp);
+  CHECK_TEST_CONDITION(added_to_main_chain(handle_test_block(c, first)));
+
+  CHECK_TEST_CONDITION(get_test_block_template(c, nullptr, second, diffic));
+  CHECK_TEST_CONDITION(second.timestamp > first.timestamp);
+  CHECK_TEST_CONDITION(handle_test_block(c, second, first.timestamp).m_verifivation_failed);
+  CHECK_TEST_CONDITION(added_to_main_chain(handle_test_block(c, second)));
+
+  return true;
+}
+
+bool gen_block_ts_template_first_strict_median::generate(std::vector<test_event_entry>& events) const
+{
+  STRICT_TS_INIT_GENERATE();
+
+  // more than half of the last blocks below the strict height are stamped beyond the new future time limit
+  const uint64_t now = time(NULL);
+  CHECK_AND_ASSERT_MES(make_strict_ts_test_chain(events, generator, blk_last, miner_account, strict_height, strict_height - 32, now - 2 * DIFFICULTY_TARGET_V2, 2 * DIFFICULTY_TARGET_V2), false, "Failed to make chain");
+  CHECK_AND_ASSERT_MES(make_strict_ts_test_chain(events, generator, blk_last, miner_account, strict_height, 31, now + 7000, 0), false, "Failed to make chain");
+
+  DO_CALLBACK(events, "check_templates");
+
+  return true;
+}
+
+bool gen_block_ts_template_first_strict_median::check_templates(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events)
+{
+  DEFINE_TESTS_ERROR_CONTEXT("gen_block_ts_template_first_strict_median::check_templates");
+
+  const uint64_t median = median_timestamp(events, ev_index);
+  CHECK_TEST_CONDITION(median > (uint64_t)time(NULL) + CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT_V17);
+
+  block first;
+  difficulty_type diffic;
+  CHECK_TEST_CONDITION(get_test_block_template(c, nullptr, first, diffic));
+  CHECK_EQ(first.major_version, HF_VERSION_STRICT_TIMESTAMPS);
+  CHECK_EQ(first.timestamp, median - first_strict_ts_slack);
+  CHECK_TEST_CONDITION(first.timestamp > (uint64_t)time(NULL));
+  CHECK_TEST_CONDITION(handle_test_block(c, first, first.timestamp - 1).m_verifivation_failed);
+  CHECK_TEST_CONDITION(added_to_main_chain(handle_test_block(c, first)));
+
+  return true;
+}
+
+bool gen_block_ts_template_alt_before_strict::generate(std::vector<test_event_entry>& events) const
+{
+  STRICT_TS_INIT_GENERATE();
+
+  // an alternative chain ahead of the clock on block 50 of 100
+  CHECK_AND_ASSERT_MES(make_strict_ts_test_chain(events, generator, blk_last, miner_account, strict_height, 100, blk_last.timestamp + 100 * 2 * DIFFICULTY_TARGET_V2, 2 * DIFFICULTY_TARGET_V2), false, "Failed to make chain");
+  blk_last = boost::get<block>(events[50]);
+  CHECK_AND_ASSERT_MES(make_strict_ts_test_chain(events, generator, blk_last, miner_account, strict_height, 35, time(NULL) + CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT / 2, 1), false, "Failed to make chain");
+
+  DO_CALLBACK(events, "check_templates");
+
+  return true;
+}
+
+bool gen_block_ts_template_alt_before_strict::check_templates(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events)
+{
+  DEFINE_TESTS_ERROR_CONTEXT("gen_block_ts_template_alt_before_strict::check_templates");
+
+  CHECK_EQ(35, c.get_alternative_blocks_count());
+  const crypto::hash alt_tip = get_block_hash(boost::get<block>(events[ev_index - 1]));
+  block b;
+  difficulty_type diffic;
+  CHECK_TEST_CONDITION(get_test_block_template(c, &alt_tip, b, diffic));
+  CHECK_TEST_CONDITION(b.major_version < HF_VERSION_STRICT_TIMESTAMPS);
+  CHECK_TEST_CONDITION(added_as_alternative(handle_test_block(c, b)));
+  CHECK_EQ(36, c.get_alternative_blocks_count());
+
+  return true;
+}
+
+bool gen_block_ts_template_tip::generate(std::vector<test_event_entry>& events) const
+{
+  STRICT_TS_INIT_GENERATE();
+
+  // with the genesis block just enough blocks for a median, which is ahead of the clock
+  CHECK_AND_ASSERT_MES(make_strict_ts_test_chain(events, generator, blk_last, miner_account, strict_height, BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW - 1, time(NULL) + 7000, DIFFICULTY_TARGET_V2 + 1), false, "Failed to make chain");
+
+  DO_CALLBACK(events, "check_templates");
+
+  return true;
+}
+
+bool gen_block_ts_template_tip::check_templates(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events)
+{
+  DEFINE_TESTS_ERROR_CONTEXT("gen_block_ts_template_tip::check_templates");
+
+  // a template on the tip given by its hash is the template on the tip
+  const crypto::hash tip = get_block_hash(boost::get<block>(events[ev_index - 1]));
+  block plain, on_tip;
+  difficulty_type diffic;
+  CHECK_TEST_CONDITION(get_test_block_template(c, nullptr, plain, diffic));
+  CHECK_EQ(plain.timestamp, median_timestamp(events, ev_index));
+  CHECK_TEST_CONDITION(plain.timestamp > (uint64_t)time(NULL));
+  CHECK_TEST_CONDITION(get_test_block_template(c, &tip, on_tip, diffic));
+  CHECK_EQ(on_tip.timestamp, plain.timestamp);
+  CHECK_TEST_CONDITION(added_to_main_chain(handle_test_block(c, on_tip)));
+
+  return true;
+}
